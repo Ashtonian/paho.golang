@@ -43,7 +43,6 @@ type (
 		AuthHandler   Auther
 		PingHandler   Pinger
 		Router        Router
-		Persistence   Persistence
 		PacketTimeout time.Duration
 		// OnServerDisconnect is called only when a packets.DISCONNECT is received from server
 		OnServerDisconnect func(*Disconnect)
@@ -134,9 +133,6 @@ func NewClient(conf ClientConfig) *Client {
 		debug:        NOOPLogger{},
 	}
 
-	if c.Persistence == nil {
-		c.Persistence = &noopPersistence{}
-	}
 	if c.MIDs == nil {
 		c.MIDs = &MIDs{index: make([]*CPContext, int(midMax))}
 	}
@@ -582,7 +578,7 @@ func (c *Client) Authenticate(ctx context.Context, a *Auth) (*AuthResponse, erro
 		c.mu.Unlock()
 		return nil, fmt.Errorf("previous authentication is still in progress")
 	}
-	c.raCtx = &CPContext{ctx, make(chan packets.ControlPacket, 1)}
+	c.raCtx = &CPContext{make(chan packets.ControlPacket, 1)}
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
@@ -645,7 +641,7 @@ func (c *Client) Subscribe(ctx context.Context, s *Subscribe) (*Suback, error) {
 
 	subCtx, cf := context.WithTimeout(ctx, c.PacketTimeout)
 	defer cf()
-	cpCtx := &CPContext{subCtx, make(chan packets.ControlPacket, 1)}
+	cpCtx := &CPContext{make(chan packets.ControlPacket, 1)}
 
 	sp := s.Packet()
 
@@ -708,7 +704,7 @@ func (c *Client) Unsubscribe(ctx context.Context, u *Unsubscribe) (*Unsuback, er
 	c.debug.Printf("unsubscribing from %+v", u.Topics)
 	unsubCtx, cf := context.WithTimeout(ctx, c.PacketTimeout)
 	defer cf()
-	cpCtx := &CPContext{unsubCtx, make(chan packets.ControlPacket, 1)}
+	cpCtx := &CPContext{make(chan packets.ControlPacket, 1)}
 
 	up := u.Packet()
 
@@ -818,7 +814,7 @@ func (c *Client) publishQoS12(ctx context.Context, pb *packets.Publish) (*Publis
 		return nil, err
 	}
 	defer c.serverInflight.Release(1)
-	cpCtx := &CPContext{pubCtx, make(chan packets.ControlPacket, 1)}
+	cpCtx := &CPContext{make(chan packets.ControlPacket, 1)}
 
 	mid, err := c.MIDs.Request(cpCtx)
 	if err != nil {

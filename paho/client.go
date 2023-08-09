@@ -43,7 +43,6 @@ type (
 		AuthHandler   Auther
 		PingHandler   Pinger
 		Router        Router
-		Persistence   Persistence
 		PacketTimeout time.Duration
 		// OnServerDisconnect is called only when a packets.DISCONNECT is received from server
 		OnServerDisconnect func(*Disconnect)
@@ -134,9 +133,6 @@ func NewClient(conf ClientConfig) *Client {
 		debug:        NOOPLogger{},
 	}
 
-	if c.Persistence == nil {
-		c.Persistence = &noopPersistence{}
-	}
 	if c.MIDs == nil {
 		c.MIDs = &MIDs{index: make([]*CPContext, int(midMax))}
 	}
@@ -219,7 +215,7 @@ func (c *Client) Connect(ctx context.Context, cp *Connect) (*Connack, error) {
 
 	c.debug.Println("waiting for CONNACK/AUTH")
 	var (
-		caPacket    *packets.Connack
+		caPacket *packets.Connack
 		// We use buffered channels to prevent goroutine leak. The Details are below.
 		// - c.expectConnack waits to send data to caPacketCh or caPacketErr.
 		// - If connCtx is cancelled (done) before c.expectConnack finishes to send data to either "unbuffered" channel,
@@ -477,7 +473,7 @@ func (c *Client) incoming() {
 				} else {
 					pr := recv.Content.(*packets.Pubrec)
 					if pr.ReasonCode >= 0x80 {
-						//Received a failure code, shortcut and return
+						// Received a failure code, shortcut and return
 						cpCtx.Return <- *recv
 					} else {
 						pl := packets.Pubrel{
@@ -492,10 +488,10 @@ func (c *Client) incoming() {
 				}
 			case packets.PUBREL:
 				c.debug.Println("received PUBREL for", recv.PacketID())
-				//Auto respond to pubrels unless failure code
+				// Auto respond to pubrels unless failure code
 				pr := recv.Content.(*packets.Pubrel)
 				if pr.ReasonCode >= 0x80 {
-					//Received a failure code, continue
+					// Received a failure code, continue
 					continue
 				} else {
 					pc := packets.Pubcomp{
@@ -534,7 +530,7 @@ func (c *Client) close() {
 
 	select {
 	case <-c.stop:
-		//already shutting down, do nothing
+		// already shutting down, do nothing
 		return
 	default:
 	}
@@ -582,7 +578,7 @@ func (c *Client) Authenticate(ctx context.Context, a *Auth) (*AuthResponse, erro
 		c.mu.Unlock()
 		return nil, fmt.Errorf("previous authentication is still in progress")
 	}
-	c.raCtx = &CPContext{ctx, make(chan packets.ControlPacket, 1)}
+	c.raCtx = &CPContext{make(chan packets.ControlPacket, 1)}
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
@@ -607,8 +603,8 @@ func (c *Client) Authenticate(ctx context.Context, a *Auth) (*AuthResponse, erro
 
 	switch rp.Type {
 	case packets.AUTH:
-		//If we've received one here it must be successful, the only way
-		//to abort a reauth is a server initiated disconnect
+		// If we've received one here it must be successful, the only way
+		// to abort a reauth is a server initiated disconnect
 		return AuthResponseFromPacketAuth(rp.Content.(*packets.Auth)), nil
 	case packets.DISCONNECT:
 		return AuthResponseFromPacketDisconnect(rp.Content.(*packets.Disconnect)), nil
@@ -645,7 +641,7 @@ func (c *Client) Subscribe(ctx context.Context, s *Subscribe) (*Suback, error) {
 
 	subCtx, cf := context.WithTimeout(ctx, c.PacketTimeout)
 	defer cf()
-	cpCtx := &CPContext{subCtx, make(chan packets.ControlPacket, 1)}
+	cpCtx := &CPContext{make(chan packets.ControlPacket, 1)}
 
 	sp := s.Packet()
 
@@ -708,7 +704,7 @@ func (c *Client) Unsubscribe(ctx context.Context, u *Unsubscribe) (*Unsuback, er
 	c.debug.Printf("unsubscribing from %+v", u.Topics)
 	unsubCtx, cf := context.WithTimeout(ctx, c.PacketTimeout)
 	defer cf()
-	cpCtx := &CPContext{unsubCtx, make(chan packets.ControlPacket, 1)}
+	cpCtx := &CPContext{make(chan packets.ControlPacket, 1)}
 
 	up := u.Packet()
 
@@ -813,7 +809,7 @@ func (c *Client) publishQoS12(ctx context.Context, pb *packets.Publish) (*Publis
 		return nil, err
 	}
 	defer c.serverInflight.Release(1)
-	cpCtx := &CPContext{pubCtx, make(chan packets.ControlPacket, 1)}
+	cpCtx := &CPContext{make(chan packets.ControlPacket, 1)}
 
 	mid, err := c.MIDs.Request(cpCtx)
 	if err != nil {

@@ -1,7 +1,6 @@
 package paho
 
 import (
-	"context"
 	"errors"
 	"sync"
 
@@ -38,8 +37,7 @@ type MIDService interface {
 // The response packet is send down the Return channel and the
 // Context is used to track timeouts.
 type CPContext struct {
-	Context context.Context
-	Return  chan packets.ControlPacket
+	Return chan packets.ControlPacket
 }
 
 // MIDs is the default MIDService provided by this library.
@@ -84,7 +82,7 @@ func (m *MIDs) Request(c *CPContext) (uint16, error) {
 func (m *MIDs) Get(i uint16) *CPContext {
 	// 0 Packet Identifier is invalid but just in case handled with returning nil to avoid panic.
 	if i == 0 {
-	  return nil
+		return nil
 	}
 	m.Lock()
 	defer m.Unlock()
@@ -96,7 +94,7 @@ func (m *MIDs) Get(i uint16) *CPContext {
 func (m *MIDs) Free(i uint16) {
 	// 0 Packet Identifier is invalid but just in case handled to avoid panic.
 	if i == 0 {
-	  return
+		return
 	}
 	m.Lock()
 	m.index[i-1] = nil

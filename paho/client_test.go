@@ -22,7 +22,6 @@ func TestNewClient(t *testing.T) {
 	c := NewClient(ClientConfig{})
 
 	require.NotNil(t, c)
-	require.NotNil(t, c.Persistence)
 	require.NotNil(t, c.MIDs)
 	require.NotNil(t, c.Router)
 	require.NotNil(t, c.PingHandler)

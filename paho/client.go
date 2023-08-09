@@ -219,7 +219,7 @@ func (c *Client) Connect(ctx context.Context, cp *Connect) (*Connack, error) {
 
 	c.debug.Println("waiting for CONNACK/AUTH")
 	var (
-		caPacket    *packets.Connack
+		caPacket *packets.Connack
 		// We use buffered channels to prevent goroutine leak. The Details are below.
 		// - c.expectConnack waits to send data to caPacketCh or caPacketErr.
 		// - If connCtx is cancelled (done) before c.expectConnack finishes to send data to either "unbuffered" channel,
@@ -477,7 +477,7 @@ func (c *Client) incoming() {
 				} else {
 					pr := recv.Content.(*packets.Pubrec)
 					if pr.ReasonCode >= 0x80 {
-						//Received a failure code, shortcut and return
+						// Received a failure code, shortcut and return
 						cpCtx.Return <- *recv
 					} else {
 						pl := packets.Pubrel{
@@ -492,10 +492,10 @@ func (c *Client) incoming() {
 				}
 			case packets.PUBREL:
 				c.debug.Println("received PUBREL for", recv.PacketID())
-				//Auto respond to pubrels unless failure code
+				// Auto respond to pubrels unless failure code
 				pr := recv.Content.(*packets.Pubrel)
 				if pr.ReasonCode >= 0x80 {
-					//Received a failure code, continue
+					// Received a failure code, continue
 					continue
 				} else {
 					pc := packets.Pubcomp{
@@ -534,7 +534,7 @@ func (c *Client) close() {
 
 	select {
 	case <-c.stop:
-		//already shutting down, do nothing
+		// already shutting down, do nothing
 		return
 	default:
 	}
@@ -607,8 +607,8 @@ func (c *Client) Authenticate(ctx context.Context, a *Auth) (*AuthResponse, erro
 
 	switch rp.Type {
 	case packets.AUTH:
-		//If we've received one here it must be successful, the only way
-		//to abort a reauth is a server initiated disconnect
+		// If we've received one here it must be successful, the only way
+		// to abort a reauth is a server initiated disconnect
 		return AuthResponseFromPacketAuth(rp.Content.(*packets.Auth)), nil
 	case packets.DISCONNECT:
 		return AuthResponseFromPacketDisconnect(rp.Content.(*packets.Disconnect)), nil
@@ -805,6 +805,11 @@ func (c *Client) Publish(ctx context.Context, p *Publish) (*PublishResponse, err
 	return nil, fmt.Errorf("QoS isn't 0, 1 or 2")
 }
 
+type packetWithID interface {
+	packets.Packet
+	SetIdentifier(uint16)
+}
+
 func (c *Client) publishQoS12(ctx context.Context, pb *packets.Publish) (*PublishResponse, error) {
 	c.debug.Println("sending QoS12 message")
 	pubCtx, cf := context.WithTimeout(ctx, c.PacketTimeout)
@@ -819,7 +824,7 @@ func (c *Client) publishQoS12(ctx context.Context, pb *packets.Publish) (*Publis
 	if err != nil {
 		return nil, err
 	}
-	defer c.MIDs.Free(mid)
+	defer c.MIDs.Free(mid) // disagree with this as ID should not be reused until we get a response!
 	pb.PacketID = mid
 
 	if _, err := pb.WriteTo(c.Conn); err != nil {

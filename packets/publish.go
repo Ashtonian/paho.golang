@@ -23,7 +23,12 @@ func (p *Publish) String() string {
 	return fmt.Sprintf("PUBLISH: PacketID:%d QOS:%d Topic:%s Duplicate:%t Retain:%t Payload:\n%s\nProperties\n%s", p.PacketID, p.QoS, p.Topic, p.Duplicate, p.Retain, string(p.Payload), p.Properties)
 }
 
-//Unpack is the implementation of the interface required function for a packet
+// SetIdentifier sets the packet identifier
+func (p *Publish) SetIdentifier(packetID uint16) {
+	p.PacketID = packetID
+}
+
+// Unpack is the implementation of the interface required function for a packet
 func (p *Publish) Unpack(r *bytes.Buffer) error {
 	var err error
 	p.Topic, err = readString(r)

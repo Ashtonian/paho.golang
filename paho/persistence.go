@@ -6,6 +6,24 @@ import (
 	"github.com/eclipse/paho.golang/packets"
 )
 
+// Persistence provides access to a store of the Session State which, as per the MQTT spec, contains:
+//
+//	QoS 1 and QoS 2 messages which have been sent to the Server, but have not been completely acknowledged.
+//	QoS 2 messages which have been received from the Server, but have not been completely acknowledged.
+//
+// Paho provides notification when relevant packets (PUBLISH, PUBACK, PUBREC, PUBREL, PUBCOMP) are sent/received
+// to allow the state to be updated.
+// It DOES NOT resend packets when the connection comes up, because by doing so, it would remove the ability for the
+// user to track such messages.
+// type Persistence interface {
+// 	// Sending will be called prior to a relevant packet being sent (or would have sent a packet had an error not occurred).
+// 	// Will not be called when an error response is being sent (e.g. received a packet but have no record of the ID).
+// 	Sending(StatePacket) error
+//
+// 	// Received will be called when a relevant packet is received from the server
+// 	Received(StatePacket) error
+// }
+
 // Persistence is an interface of the functions for a struct
 // that is used to persist ControlPackets.
 // Open() is an initialiser to prepare the Persistence for use

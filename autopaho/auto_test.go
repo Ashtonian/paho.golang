@@ -33,8 +33,124 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
+// TestDisconnect confirms that Disconnect closes the connection and exits cleanly
+func TestDisconnect(t *testing.T) {
+	t.Parallel()
+	broker, _ := url.Parse(dummyURL)
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	logger := &testLog{l: t, prefix: "test:"}
+	defer func() {
+		// Prevent any logging after completion. Unfortunately, there is currently no way to know if paho.Client
+		// has fully shutdown. As such, messages may be logged after shutdown (which will result in a panic).
+		serverLogger.Stop()
+		logger.Stop()
+	}()
+
+	ts := testserver.New(serverLogger)
+
+	type tsConnUpMsg struct {
+		cancelFn func()        // Function to cancel test broker context
+		done     chan struct{} // Will be closed when the test broker has disconnected (and shutdown)
+	}
+	tsConnUpChan := make(chan tsConnUpMsg) // Message will be sent when test broker connection is up
+	pahoConnUpChan := make(chan struct{})  // When autopaho reports connection is up write to channel will occur
+
+	errCh := make(chan error, 2)
+	config := ClientConfig{
+		BrokerUrls:        []*url.URL{broker},
+		KeepAlive:         60,
+		ConnectRetryDelay: time.Millisecond, // Retry connection very quickly!
+		ConnectTimeout:    shortDelay,       // Connection should come up very quickly
+		AttemptConnection: func(ctx context.Context, _ ClientConfig, _ *url.URL) (net.Conn, error) {
+			ctx, cancel := context.WithCancel(ctx)
+			conn, done, err := ts.Connect(ctx)
+			if err == nil { // The above may fail if attempted too quickly (before disconnect processed)
+				tsConnUpChan <- tsConnUpMsg{cancelFn: cancel, done: done}
+			} else {
+				cancel()
+			}
+			return conn, err
+		},
+		OnConnectionUp: func(*ConnectionManager, *paho.Connack) { pahoConnUpChan <- struct{}{} },
+		Debug:          logger,
+		PahoDebug:      logger,
+		PahoErrors:     logger,
+		ClientConfig: paho.ClientConfig{
+			ClientID: "test",
+			OnServerDisconnect: func(disconnect *paho.Disconnect) {
+				errCh <- fmt.Errorf("disconnect received: %v", disconnect)
+			},
+			OnClientError: func(err error) {
+				errCh <- err
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cm, err := NewConnection(ctx, config)
+	if err != nil {
+		t.Fatalf("expected NewConnection success: %s", err)
+	}
+
+	var connUpMsg tsConnUpMsg
+	select {
+	case connUpMsg = <-tsConnUpChan:
+		defer connUpMsg.cancelFn()
+	case <-time.After(shortDelay):
+		t.Fatal("timeout awaiting initial connection request")
+	}
+	select {
+	case <-pahoConnUpChan:
+	case <-time.After(shortDelay):
+		t.Fatal("timeout awaiting connection up")
+	}
+
+	if !ts.Connected() {
+		t.Fatal("test server should be connected")
+	}
+
+	// Disconnect
+	disconnectErr := make(chan error)
+	go func() {
+		disconnectErr <- cm.Disconnect(ctx)
+	}()
+	select {
+	case err = <-disconnectErr:
+		if err != nil {
+			t.Fatalf("Disconnect returned error: %s", err)
+		}
+	case <-time.After(longerDelay):
+		t.Fatal("Disconnect should return relatively quickly")
+	}
+
+	// Connection manager should be Done
+	select {
+	case <-cm.Done():
+	case <-time.After(shortDelay):
+		t.Fatal("connection manager should be done after Disconnect Called")
+	}
+
+	// The test server should have picked up the dropped connection
+	if ts.Connected() {
+		t.Fatal("connection with test server should have dropped")
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("callbacks should not be called on Disconnect: %s", err)
+	default:
+	}
+
+	// Prevent any future logging - unfortunately, there is currently no way to know if paho.Client has completely
+	// shutdown, as such, messages may be logged after shutdown (which will result in a panic).
+	serverLogger.Stop()
+	logger.Stop()
+}
+
 // TestReconnect confirms that the connection is automatically re-established when lost
 func TestReconnect(t *testing.T) {
+	t.Parallel()
 	broker, _ := url.Parse(dummyURL)
 	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	logger := &testLog{l: t, prefix: "test:"}
@@ -146,6 +262,7 @@ func TestReconnect(t *testing.T) {
 
 // TestBasicPubSub performs pub/sub operations at each QOS level
 func TestBasicPubSub(t *testing.T) {
+	t.Parallel()
 	broker, _ := url.Parse(dummyURL)
 	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	logger := &testLog{l: t, prefix: "test:"}

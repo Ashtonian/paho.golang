@@ -22,7 +22,7 @@ func TestNewClient(t *testing.T) {
 	c := NewClient(ClientConfig{})
 
 	require.NotNil(t, c)
-	require.NotNil(t, c.MIDs)
+	require.NotNil(t, c.Session)
 	require.NotNil(t, c.Router)
 	require.NotNil(t, c.PingHandler)
 
@@ -44,7 +44,10 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClientConnect(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "ClientConnect:"}
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -62,7 +65,7 @@ func TestClientConnect(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "CONNECT: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	cp := &Connect{
 		KeepAlive:  30,
@@ -88,7 +91,10 @@ func TestClientConnect(t *testing.T) {
 }
 
 func TestClientSubscribe(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "ClientSubscribe:"}
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.SUBACK, &packets.Suback{
 		Reasons:    []byte{1, 2, 0},
 		Properties: &packets.Properties{},
@@ -100,12 +106,13 @@ func TestClientSubscribe(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "SUBSCRIBE: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
 	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	s := &Subscribe{
 		Subscriptions: []SubscribeOptions{
@@ -123,7 +130,10 @@ func TestClientSubscribe(t *testing.T) {
 }
 
 func TestClientUnsubscribe(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "ClientUnsubscribe:"}
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.UNSUBACK, &packets.Unsuback{
 		Reasons:    []byte{0, 17},
 		Properties: &packets.Properties{},
@@ -135,12 +145,13 @@ func TestClientUnsubscribe(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "UNSUBSCRIBE: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
 	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	u := &Unsubscribe{
 		Topics: []string{
@@ -157,7 +168,10 @@ func TestClientUnsubscribe(t *testing.T) {
 }
 
 func TestClientPublishQoS0(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "ClientPublishQoS0:"}
 	ts := newTestServer()
+	ts.logger = serverLogger
 	go ts.Run()
 	defer ts.Stop()
 
@@ -165,7 +179,7 @@ func TestClientPublishQoS0(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "PUBLISHQOS0: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
 	c.clientInflight = semaphore.NewWeighted(10000)
@@ -173,6 +187,7 @@ func TestClientPublishQoS0(t *testing.T) {
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
 	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	p := &Publish{
 		Topic:   "test/0",
@@ -187,7 +202,10 @@ func TestClientPublishQoS0(t *testing.T) {
 }
 
 func TestClientPublishQoS1(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "ClientPublishQoS1:"}
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.PUBACK, &packets.Puback{
 		ReasonCode: packets.PubackSuccess,
 		Properties: &packets.Properties{},
@@ -199,7 +217,7 @@ func TestClientPublishQoS1(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "PUBLISHQOS1: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
 	c.clientInflight = semaphore.NewWeighted(10000)
@@ -207,6 +225,7 @@ func TestClientPublishQoS1(t *testing.T) {
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
 	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	p := &Publish{
 		Topic:   "test/1",
@@ -222,7 +241,10 @@ func TestClientPublishQoS1(t *testing.T) {
 }
 
 func TestClientPublishQoS2(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "ClientPublishQoS2:"}
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.PUBREC, &packets.Pubrec{
 		ReasonCode: packets.PubrecSuccess,
 		Properties: &packets.Properties{},
@@ -238,7 +260,7 @@ func TestClientPublishQoS2(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "PUBLISHQOS2: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
 	c.clientInflight = semaphore.NewWeighted(10000)
@@ -246,6 +268,7 @@ func TestClientPublishQoS2(t *testing.T) {
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
 	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	p := &Publish{
 		Topic:   "test/2",
@@ -261,8 +284,12 @@ func TestClientPublishQoS2(t *testing.T) {
 }
 
 func TestClientReceiveQoS0(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "TestClientReceiveQoS0:"}
+
 	rChan := make(chan struct{})
 	ts := newTestServer()
+	ts.logger = serverLogger
 	go ts.Run()
 	defer ts.Stop()
 
@@ -276,7 +303,7 @@ func TestClientReceiveQoS0(t *testing.T) {
 		}),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "RECEIVEQOS0: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
 	c.clientInflight = semaphore.NewWeighted(10000)
@@ -284,6 +311,7 @@ func TestClientReceiveQoS0(t *testing.T) {
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
 	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 	go c.routePublishPackets()
 
 	err := ts.SendPacket(&packets.Publish{
@@ -297,8 +325,12 @@ func TestClientReceiveQoS0(t *testing.T) {
 }
 
 func TestClientReceiveQoS1(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "TestClientReceiveQoS1:"}
+
 	rChan := make(chan struct{})
 	ts := newTestServer()
+	ts.logger = serverLogger
 	go ts.Run()
 	defer ts.Stop()
 
@@ -312,7 +344,7 @@ func TestClientReceiveQoS1(t *testing.T) {
 		}),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "RECEIVEQOS1: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
 	c.clientInflight = semaphore.NewWeighted(10000)
@@ -320,12 +352,14 @@ func TestClientReceiveQoS1(t *testing.T) {
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
 	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 	go c.routePublishPackets()
 
 	err := ts.SendPacket(&packets.Publish{
-		Topic:   "test/1",
-		QoS:     1,
-		Payload: []byte("test payload"),
+		PacketID: 1,
+		Topic:    "test/1",
+		QoS:      1,
+		Payload:  []byte("test payload"),
 	})
 	require.NoError(t, err)
 
@@ -333,8 +367,12 @@ func TestClientReceiveQoS1(t *testing.T) {
 }
 
 func TestClientReceiveQoS2(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "TestClientReceiveQoS2:"}
+
 	rChan := make(chan struct{})
 	ts := newTestServer()
+	ts.logger = serverLogger
 	go ts.Run()
 	defer ts.Stop()
 
@@ -348,7 +386,7 @@ func TestClientReceiveQoS2(t *testing.T) {
 		}),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "RECEIVEQOS2: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
 	c.clientInflight = semaphore.NewWeighted(10000)
@@ -356,12 +394,14 @@ func TestClientReceiveQoS2(t *testing.T) {
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
 	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 	go c.routePublishPackets()
 
 	err := ts.SendPacket(&packets.Publish{
-		Topic:   "test/2",
-		QoS:     2,
-		Payload: []byte("test payload"),
+		PacketID: 1,
+		Topic:    "test/2",
+		QoS:      2,
+		Payload:  []byte("test payload"),
 	})
 	require.NoError(t, err)
 
@@ -369,7 +409,11 @@ func TestClientReceiveQoS2(t *testing.T) {
 }
 
 func TestClientReceiveAndAckInOrder(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "ClientReceiveAndAckInOrder:"}
+
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -398,7 +442,7 @@ func TestClientReceiveAndAckInOrder(t *testing.T) {
 		}),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "RECEIVEORDER: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 	t.Cleanup(c.close)
 
 	ctx := context.Background()
@@ -447,7 +491,10 @@ func TestClientReceiveAndAckInOrder(t *testing.T) {
 }
 
 func TestManualAcksInOrder(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "ManualAcksInOrder:"}
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -478,7 +525,7 @@ func TestManualAcksInOrder(t *testing.T) {
 		require.NoError(t, c.Ack(p))
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "RECEIVEORDER: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 	t.Cleanup(c.close)
 
 	ctx := context.Background()
@@ -534,8 +581,12 @@ func TestManualAcksInOrder(t *testing.T) {
 }
 
 func TestReceiveServerDisconnect(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "ServerDisconnect:"}
+
 	rChan := make(chan struct{})
 	ts := newTestServer()
+	ts.logger = serverLogger
 	go ts.Run()
 	defer ts.Stop()
 
@@ -548,7 +599,7 @@ func TestReceiveServerDisconnect(t *testing.T) {
 		},
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "SERVERDISCONNECT: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
 	c.clientInflight = semaphore.NewWeighted(10000)
@@ -556,6 +607,7 @@ func TestReceiveServerDisconnect(t *testing.T) {
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
 	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	err := ts.SendPacket(&packets.Disconnect{
 		ReasonCode: packets.DisconnectServerShuttingDown,
@@ -569,7 +621,11 @@ func TestReceiveServerDisconnect(t *testing.T) {
 }
 
 func TestAuthenticate(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "Authenticate:"}
+
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.AUTH, &packets.Auth{
 		ReasonCode: packets.AuthSuccess,
 	})
@@ -581,7 +637,7 @@ func TestAuthenticate(t *testing.T) {
 		AuthHandler: &fakeAuth{},
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "AUTHENTICATE: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
 	c.clientInflight = semaphore.NewWeighted(10000)
@@ -589,6 +645,7 @@ func TestAuthenticate(t *testing.T) {
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
 	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	ctx, cf := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cf()
@@ -648,7 +705,11 @@ func TestAuthenticateOnConnect(t *testing.T) {
 			wg.Done()
 		},
 	}
+
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "AuthenticateOnConnect:"}
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.CONNACK, &packets.Auth{
 		ReasonCode: packets.AuthContinueAuthentication,
 		Properties: &packets.Properties{
@@ -671,7 +732,7 @@ func TestAuthenticateOnConnect(t *testing.T) {
 		AuthHandler: &auther,
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "AUTHENTICATEONCONNECT: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 
 	cp := &Connect{
 		KeepAlive:  30,
@@ -692,7 +753,10 @@ func TestAuthenticateOnConnect(t *testing.T) {
 }
 
 func TestCleanup(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+
 	ts := newTestServer()
+	ts.logger = serverLogger
 	go ts.Run()
 
 	c := NewClient(ClientConfig{
@@ -745,7 +809,11 @@ func TestCleanup(t *testing.T) {
 }
 
 func TestDisconnect(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+	clientLogger := &testLog{l: t, prefix: "Disconnect:"}
+
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -763,7 +831,7 @@ func TestDisconnect(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
-	c.SetDebugLogger(log.New(os.Stderr, "RECEIVEORDER: ", log.LstdFlags))
+	c.SetDebugLogger(clientLogger)
 	t.Cleanup(c.close)
 
 	ctx := context.Background()
@@ -788,7 +856,10 @@ func TestDisconnect(t *testing.T) {
 }
 
 func TestCloseDeadlock(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -836,7 +907,10 @@ func TestCloseDeadlock(t *testing.T) {
 }
 
 func TestSendOnClosedChannel(t *testing.T) {
+	serverLogger := &testLog{l: t, prefix: "testServer:"}
+
 	ts := newTestServer()
+	ts.logger = serverLogger
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,

@@ -28,6 +28,11 @@ func (p *Publish) SetIdentifier(packetID uint16) {
 	p.PacketID = packetID
 }
 
+// Type returns the current packet type
+func (s *Publish) Type() byte {
+	return PUBLISH
+}
+
 // Unpack is the implementation of the interface required function for a packet
 func (p *Publish) Unpack(r *bytes.Buffer) error {
 	var err error

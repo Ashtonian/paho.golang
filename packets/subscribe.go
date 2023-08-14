@@ -27,6 +27,16 @@ func (s *Subscribe) String() string {
 	return b.String()
 }
 
+// SetIdentifier sets the packet identifier
+func (s *Subscribe) SetIdentifier(packetID uint16) {
+	s.PacketID = packetID
+}
+
+// Type returns the current packet type
+func (s *Subscribe) Type() byte {
+	return SUBSCRIBE
+}
+
 // SubOptions is the struct representing the options for a subscription
 type SubOptions struct {
 	Topic             string

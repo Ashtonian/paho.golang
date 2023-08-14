@@ -109,6 +109,7 @@ func (c *ControlPacket) PacketID() uint16 {
 	}
 }
 
+// PacketType returns the packet type as a string
 func (c *ControlPacket) PacketType() string {
 	return [...]string{
 		"",

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/packets"
+	"github.com/eclipse/paho.golang/paho/internal/basictestserver"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,10 +45,8 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClientConnect(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "ClientConnect:"}
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -91,10 +90,8 @@ func TestClientConnect(t *testing.T) {
 }
 
 func TestClientSubscribe(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "ClientSubscribe:"}
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.SUBACK, &packets.Suback{
 		Reasons:    []byte{1, 2, 0},
 		Properties: &packets.Properties{},
@@ -130,10 +127,8 @@ func TestClientSubscribe(t *testing.T) {
 }
 
 func TestClientUnsubscribe(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "ClientUnsubscribe:"}
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.UNSUBACK, &packets.Unsuback{
 		Reasons:    []byte{0, 17},
 		Properties: &packets.Properties{},
@@ -168,10 +163,8 @@ func TestClientUnsubscribe(t *testing.T) {
 }
 
 func TestClientPublishQoS0(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "ClientPublishQoS0:"}
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	go ts.Run()
 	defer ts.Stop()
 
@@ -182,7 +175,6 @@ func TestClientPublishQoS0(t *testing.T) {
 	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
-	c.clientInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -202,10 +194,8 @@ func TestClientPublishQoS0(t *testing.T) {
 }
 
 func TestClientPublishQoS1(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "ClientPublishQoS1:"}
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.PUBACK, &packets.Puback{
 		ReasonCode: packets.PubackSuccess,
 		Properties: &packets.Properties{},
@@ -220,7 +210,6 @@ func TestClientPublishQoS1(t *testing.T) {
 	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
-	c.clientInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -241,10 +230,8 @@ func TestClientPublishQoS1(t *testing.T) {
 }
 
 func TestClientPublishQoS2(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "ClientPublishQoS2:"}
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.PUBREC, &packets.Pubrec{
 		ReasonCode: packets.PubrecSuccess,
 		Properties: &packets.Properties{},
@@ -263,7 +250,6 @@ func TestClientPublishQoS2(t *testing.T) {
 	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
-	c.clientInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -284,12 +270,10 @@ func TestClientPublishQoS2(t *testing.T) {
 }
 
 func TestClientReceiveQoS0(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "TestClientReceiveQoS0:"}
 
 	rChan := make(chan struct{})
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	go ts.Run()
 	defer ts.Stop()
 
@@ -306,7 +290,6 @@ func TestClientReceiveQoS0(t *testing.T) {
 	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
-	c.clientInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -325,12 +308,10 @@ func TestClientReceiveQoS0(t *testing.T) {
 }
 
 func TestClientReceiveQoS1(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "TestClientReceiveQoS1:"}
 
 	rChan := make(chan struct{})
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	go ts.Run()
 	defer ts.Stop()
 
@@ -347,7 +328,6 @@ func TestClientReceiveQoS1(t *testing.T) {
 	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
-	c.clientInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -367,12 +347,10 @@ func TestClientReceiveQoS1(t *testing.T) {
 }
 
 func TestClientReceiveQoS2(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "TestClientReceiveQoS2:"}
 
 	rChan := make(chan struct{})
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	go ts.Run()
 	defer ts.Stop()
 
@@ -389,7 +367,6 @@ func TestClientReceiveQoS2(t *testing.T) {
 	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
-	c.clientInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -409,11 +386,9 @@ func TestClientReceiveQoS2(t *testing.T) {
 }
 
 func TestClientReceiveAndAckInOrder(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "ClientReceiveAndAckInOrder:"}
 
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -491,10 +466,8 @@ func TestClientReceiveAndAckInOrder(t *testing.T) {
 }
 
 func TestManualAcksInOrder(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "ManualAcksInOrder:"}
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -581,12 +554,9 @@ func TestManualAcksInOrder(t *testing.T) {
 }
 
 func TestReceiveServerDisconnect(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "ServerDisconnect:"}
-
 	rChan := make(chan struct{})
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	go ts.Run()
 	defer ts.Stop()
 
@@ -602,7 +572,6 @@ func TestReceiveServerDisconnect(t *testing.T) {
 	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
-	c.clientInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -621,11 +590,8 @@ func TestReceiveServerDisconnect(t *testing.T) {
 }
 
 func TestAuthenticate(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "Authenticate:"}
-
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.AUTH, &packets.Auth{
 		ReasonCode: packets.AuthSuccess,
 	})
@@ -640,7 +606,6 @@ func TestAuthenticate(t *testing.T) {
 	c.SetDebugLogger(clientLogger)
 
 	c.serverInflight = semaphore.NewWeighted(10000)
-	c.clientInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -706,10 +671,8 @@ func TestAuthenticateOnConnect(t *testing.T) {
 		},
 	}
 
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "AuthenticateOnConnect:"}
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.CONNACK, &packets.Auth{
 		ReasonCode: packets.AuthContinueAuthentication,
 		Properties: &packets.Properties{
@@ -753,10 +716,8 @@ func TestAuthenticateOnConnect(t *testing.T) {
 }
 
 func TestCleanup(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
-
-	ts := newTestServer()
-	ts.logger = serverLogger
+	serverLogger := testLog{l: t, prefix: "TestServer:"}
+	ts := basictestserver.New(&serverLogger)
 	go ts.Run()
 
 	c := NewClient(ClientConfig{
@@ -777,7 +738,7 @@ func TestCleanup(t *testing.T) {
 
 	// verify that it's possible to try again
 	ts.Stop()
-	ts = newTestServer()
+	ts = basictestserver.New(&serverLogger)
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -809,11 +770,8 @@ func TestCleanup(t *testing.T) {
 }
 
 func TestDisconnect(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
 	clientLogger := &testLog{l: t, prefix: "Disconnect:"}
-
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -856,10 +814,7 @@ func TestDisconnect(t *testing.T) {
 }
 
 func TestCloseDeadlock(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
-
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -907,10 +862,7 @@ func TestCloseDeadlock(t *testing.T) {
 }
 
 func TestSendOnClosedChannel(t *testing.T) {
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
-
-	ts := newTestServer()
-	ts.logger = serverLogger
+	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -976,3 +928,17 @@ func isChannelClosed(ch chan struct{}) (closed bool) {
 	ch <- struct{}{}
 	return
 }
+
+// fakeAuth implements the Auther interface to test client.AuthHandler
+type fakeAuth struct{}
+
+func (f *fakeAuth) Authenticate(a *Auth) *Auth {
+	return &Auth{
+		Properties: &AuthProperties{
+			AuthMethod: "TEST",
+			AuthData:   []byte("secret data"),
+		},
+	}
+}
+
+func (f *fakeAuth) Authenticated() {}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/packets"
+	"github.com/eclipse/paho.golang/paho/session"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -50,8 +51,8 @@ type (
 		// wrapper or extend the custom net.Conn struct with sync.Locker.
 		Conn net.Conn
 
-		// TODO: make this an interface?
-		Session *sessionState
+		Session          SessionManager
+		autoCloseSession bool
 
 		AuthHandler   Auther
 		PingHandler   Pinger
@@ -91,7 +92,6 @@ type (
 		serverProps    CommsProperties
 		clientProps    CommsProperties
 		serverInflight *semaphore.Weighted
-		clientInflight *semaphore.Weighted
 		debug          Logger
 		errors         Logger
 	}
@@ -147,14 +147,8 @@ func NewClient(conf ClientConfig) *Client {
 	}
 
 	if c.Session == nil {
-		c.Session = &sessionState{
-			serverPackets: make(map[uint16]byte),
-			serverStore:   NewMemoryStore(),
-			clientPackets: make(map[uint16]clientGenerated),
-			clientStore:   NewMemoryStore(),
-			debug:         NOOPLogger{},
-			errors:        NOOPLogger{},
-		}
+		c.Session = session.NewInMemory()
+		c.autoCloseSession = true // We created `Session`, so need to close it when done (so handlers all return)
 	}
 	if c.PacketTimeout == 0 {
 		c.PacketTimeout = 10 * time.Second
@@ -299,8 +293,10 @@ func (c *Client) Connect(ctx context.Context, cp *Connect) (*Connack, error) {
 	}
 
 	c.serverInflight = semaphore.NewWeighted(int64(c.serverProps.ReceiveMaximum))
-	c.clientInflight = semaphore.NewWeighted(int64(c.clientProps.ReceiveMaximum))
 	c.Session.ConAckReceived(c.Conn, ccp, caPacket)
+	// TODO if session is present then there will already be transactions in flight so we need to
+	// allocate these - this is even more of a reason to move the semaphore into the session
+
 	c.debug.Println("received CONNACK, starting PingHandler")
 	c.workers.Add(1)
 	go func() {
@@ -499,6 +495,11 @@ func (c *Client) close() {
 	c.acksTracker.reset()
 	c.debug.Println("acks tracker reset")
 	c.Session.ConnectionLost(nil)
+	if c.autoCloseSession {
+		if err := c.Session.Close(); err != nil {
+			c.errors.Println("error closing session", err)
+		}
+	}
 	c.debug.Println("session updated")
 }
 
@@ -745,12 +746,7 @@ func (c *Client) Publish(ctx context.Context, p *Publish) (*PublishResponse, err
 	return nil, fmt.Errorf("QoS isn't 0, 1 or 2")
 }
 
-type packetWithID interface {
-	packets.Packet
-	SetIdentifier(uint16) // Sets the packet identifier
-	Type() byte           // Gets the packet type
-}
-
+// Question - what to do with context. With 0.11 this was mixed (could lock at
 func (c *Client) publishQoS12(ctx context.Context, pb *packets.Publish) (*PublishResponse, error) {
 	c.debug.Println("sending QoS12 message")
 	pubCtx, cf := context.WithTimeout(ctx, c.PacketTimeout)
@@ -758,7 +754,7 @@ func (c *Client) publishQoS12(ctx context.Context, pb *packets.Publish) (*Publis
 	// TODO: Should serverInflight be handled here or in sessionState? (possibly easier in state?)
 	if err := c.serverInflight.Acquire(pubCtx, 1); err != nil {
 		return nil, err
-	}
+	} // buggy linked to context passed into Publish but what happens when connection closed (I guess preceeding locks release and we then run producing an error)
 	defer c.serverInflight.Release(1)
 
 	ret := make(chan packets.ControlPacket, 1)
@@ -863,12 +859,12 @@ func (c *Client) Disconnect(d *Disconnect) error {
 // and sets it to be used by the debug log endpoint
 func (c *Client) SetDebugLogger(l Logger) {
 	c.debug = l
-	c.Session.debug = l
+	c.Session.SetDebugLogger(l)
 }
 
 // SetErrorLogger takes an instance of the paho Logger interface
 // and sets it to be used by the error log endpoint
 func (c *Client) SetErrorLogger(l Logger) {
 	c.errors = l
-	c.Session.errors = l
+	c.Session.SetErrorLogger(l)
 }

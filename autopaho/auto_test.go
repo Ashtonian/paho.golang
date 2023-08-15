@@ -33,6 +33,11 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
+// TestConnect confirms that the computed CONNECT packet is as anticipated
+func TestConnect(t *testing.T) {
+
+}
+
 // TestDisconnect confirms that Disconnect closes the connection and exits cleanly
 func TestDisconnect(t *testing.T) {
 	t.Parallel()
@@ -495,45 +500,4 @@ func TestClientConfig_buildConnectPacket(t *testing.T) {
 		t.Errorf("Will message Delay Interval did not match expected [200]: found [%v]", *(cp.Properties.WillDelayInterval))
 	}
 
-}
-
-// testLogger contains the logging functions provided by testing.T
-type testLogger interface {
-	Log(args ...interface{})
-	Logf(format string, args ...interface{})
-}
-
-// The testLog type is an adapter to allow the use of testing.T as a paho.Logger.
-// With this implementation, log messages will only be output when a test fails (and will be associated with the test).
-type testLog struct {
-	sync.Mutex
-	l      testLogger
-	prefix string
-}
-
-// Println prints a line to the log
-// Println its arguments in the test log (only printed if the test files or appropriate arguments passed to go test).
-func (t *testLog) Println(v ...interface{}) {
-	t.Lock()
-	defer t.Unlock()
-	if t.l != nil {
-		t.l.Log(append([]interface{}{t.prefix}, v...)...)
-	}
-}
-
-// Printf formats its arguments according to the format, analogous to fmt.Printf, and
-// records the text in the test log (only printed if the test files or appropriate arguments passed to go test).
-func (t *testLog) Printf(format string, v ...interface{}) {
-	t.Lock()
-	defer t.Unlock()
-	if t.l != nil {
-		t.l.Logf(t.prefix+format, v...)
-	}
-}
-
-// Stop prevents future logging
-func (t *testLog) Stop() {
-	t.Lock()
-	defer t.Unlock()
-	t.l = nil
 }

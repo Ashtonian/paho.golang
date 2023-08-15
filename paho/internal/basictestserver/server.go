@@ -1,4 +1,4 @@
-package paho
+package basictestserver
 
 import (
 	"log"
@@ -8,20 +8,13 @@ import (
 	"github.com/eclipse/paho.golang/packets"
 )
 
-type fakeAuth struct{}
-
-func (f *fakeAuth) Authenticate(a *Auth) *Auth {
-	return &Auth{
-		Properties: &AuthProperties{
-			AuthMethod: "TEST",
-			AuthData:   []byte("secret data"),
-		},
-	}
+// Logger mirrors paho.Logger
+type Logger interface {
+	Println(v ...interface{})
+	Printf(format string, v ...interface{})
 }
 
-func (f *fakeAuth) Authenticated() {}
-
-type testServer struct {
+type TestServer struct {
 	conn       net.Conn
 	clientConn net.Conn
 	stop       chan struct{}
@@ -34,37 +27,39 @@ type testServer struct {
 	logger Logger
 }
 
-func newTestServer(logger Logger) *testServer {
-	t := &testServer{
+func New(logger Logger) *TestServer {
+	t := &TestServer{
 		stop:      make(chan struct{}),
 		responses: make(map[byte]packets.Packet),
 		logger:    logger,
 	}
 	t.conn, t.clientConn = net.Pipe()
-	t.logger = log.Default()
+	if logger == nil {
+		t.logger = log.Default()
+	}
 	return t
 }
 
-func (t *testServer) ClientConn() net.Conn {
+func (t *TestServer) ClientConn() net.Conn {
 	return t.clientConn
 }
 
-func (t *testServer) SetResponse(pt byte, p packets.Packet) {
+func (t *TestServer) SetResponse(pt byte, p packets.Packet) {
 	t.responses[pt] = p
 }
 
-func (t *testServer) SendPacket(p packets.Packet) error {
+func (t *TestServer) SendPacket(p packets.Packet) error {
 	_, err := p.WriteTo(t.conn)
 
 	return err
 }
 
-func (t *testServer) Stop() {
+func (t *TestServer) Stop() {
 	t.conn.Close()
 	close(t.stop)
 }
 
-func (t *testServer) Run() {
+func (t *TestServer) Run() {
 	for {
 		select {
 		case <-t.stop:
@@ -172,22 +167,22 @@ func (t *testServer) Run() {
 	}
 }
 
-func (t *testServer) ReceivedPubacks() []packets.Puback {
+func (t *TestServer) ReceivedPubacks() []packets.Puback {
 	t.receivedMu.Lock()
 	defer t.receivedMu.Unlock()
-	packets := make([]packets.Puback, len(t.receivedPubacks))
+	ret := make([]packets.Puback, len(t.receivedPubacks))
 	for k := range t.receivedPubacks {
-		packets[k] = *t.receivedPubacks[k]
+		ret[k] = *t.receivedPubacks[k]
 	}
-	return packets
+	return ret
 }
 
-func (t *testServer) ReceivedPubrecs() []packets.Pubrec {
+func (t *TestServer) ReceivedPubrecs() []packets.Pubrec {
 	t.receivedMu.Lock()
 	defer t.receivedMu.Unlock()
-	packets := make([]packets.Pubrec, len(t.receivedPubrecs))
+	ret := make([]packets.Pubrec, len(t.receivedPubrecs))
 	for k := range t.receivedPubrecs {
-		packets[k] = *t.receivedPubrecs[k]
+		ret[k] = *t.receivedPubrecs[k]
 	}
-	return packets
+	return ret
 }

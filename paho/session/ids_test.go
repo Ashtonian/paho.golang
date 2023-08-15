@@ -1,0 +1,136 @@
+package session
+
+import (
+	"math"
+	"math/rand"
+	"testing"
+	"time"
+
+	"github.com/eclipse/paho.golang/packets"
+	"github.com/stretchr/testify/assert"
+)
+
+// TestMidAllocateAndFreeAll checks that we can allocate all message identifiers and that, when freed, a message is always
+// sent to the response channel
+func TestMidAllocateAndFreeAll(t *testing.T) {
+	ss := NewInMemory()
+
+	// Use full band
+	cpChan := make(chan packets.ControlPacket)
+	for i := uint16(1); i != 0; i++ {
+		v, _ := ss.allocateNextMid(packets.PUBLISH, cpChan)
+		assert.Equal(t, i, v)
+	}
+
+	// Free all Mids
+	allResponded := make(chan struct{})
+	go func() {
+		for i := uint16(0); i < midMax; i++ {
+			<-cpChan
+		}
+		close(allResponded)
+	}()
+
+	resp := packets.ControlPacket{
+		Content: nil,
+		FixedHeader: packets.FixedHeader{
+			Type:  packets.PUBACK,
+			Flags: 0,
+		},
+	}
+	for i := uint16(1); i != 0; i++ {
+		assert.NoError(t, ss.endClientGenerated(i, &resp))
+	}
+	select {
+	case <-allResponded:
+	case <-time.After(time.Second):
+		t.Fatal("did not receive responses")
+	}
+	select {
+	case <-cpChan:
+		t.Fatal("unexpected response")
+	default:
+	}
+
+	// Allocate all Mids again
+	for i := uint16(1); i != 0; i++ {
+		v, _ := ss.allocateNextMid(packets.PUBLISH, cpChan)
+		assert.Equal(t, i, v)
+	}
+
+	// Closing the store should free all Ids sending a message to the provided channel
+	gotCp := make(chan struct{})
+	go func() {
+		for i := uint16(0); i < midMax; i++ {
+			<-cpChan
+		}
+		close(gotCp)
+	}()
+	ss.Close()
+	select {
+	case <-gotCp:
+	case <-time.After(time.Second):
+		t.Fatal("did not receive responses")
+	}
+	select {
+	case <-cpChan:
+		t.Fatal("unexpected response")
+	default:
+	}
+}
+
+// TestMidHoles confirms that random "holes" within the Message ID map will be found and utilised
+func TestMidHoles(t *testing.T) {
+	ss := NewInMemory()
+
+	// For this test we ignore responses
+	cpChan := make(chan packets.ControlPacket)
+	defer close(cpChan)
+	go func() {
+		for range cpChan {
+		}
+	}()
+
+	// Allocate all Mids
+	for i := uint16(1); i != 0; i++ {
+		v, _ := ss.allocateNextMid(packets.PUBLISH, cpChan)
+		assert.Equal(t, i, v)
+	}
+
+	resp := packets.ControlPacket{
+		Content: nil,
+		FixedHeader: packets.FixedHeader{
+			Type:  packets.PUBACK,
+			Flags: 0,
+		},
+	}
+
+	// Currently MIDs.index is filled in, randomly dig some holes and try to fill in all of them again.
+	h := map[uint16]bool{}
+	for i := 0; i < 60000; i++ {
+		r := uint16(rand.Intn(math.MaxUint16))
+		r += 1 // Want 0-65535
+
+		ss.endClientGenerated(r, &resp)
+		h[r] = true
+	}
+	t.Log("Num of holes:", len(h))
+	for i := 0; i < len(h); i++ {
+		_, err := ss.allocateNextMid(packets.PUBLISH, cpChan)
+		assert.Nil(t, err)
+	}
+}
+
+// Expecting MIDs.Free(0) always do nothing (no panic), because 0 identifier is invalid and ignored.
+func TestMIDsFreeZeroID(t *testing.T) {
+	ss := NewInMemory()
+
+	resp := packets.ControlPacket{
+		Content: nil,
+		FixedHeader: packets.FixedHeader{
+			Type:  packets.PUBACK,
+			Flags: 0,
+		},
+	}
+	assert.NotPanics(t, func() { assert.NoError(t, ss.endClientGenerated(0, &resp)) })
+}

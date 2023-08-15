@@ -1,4 +1,4 @@
-package paho
+package memory
 
 import (
 	"bytes"
@@ -11,7 +11,7 @@ import (
 
 // TestMemoryStore basic tests of the memory store
 func TestMemoryStore(t *testing.T) {
-	s := NewMemoryStore()
+	s := New()
 
 	ids := []uint16{65535, 2, 10, 32300, 5890}
 	for _, id := range ids {
@@ -71,10 +71,10 @@ func TestMemoryStore(t *testing.T) {
 
 }
 
-// TestMemoryStoreBig creates a fully populated MemoryStore and checks things work
+// TestMemoryStoreBig creates a fully populated Store and checks things work
 // Adding messages would make the structure bigger but should have no impact on the struct functions.
 func TestMemoryStoreBig(t *testing.T) {
-	s := NewMemoryStore()
+	s := New()
 
 	for id := uint16(1); id != 0; id++ {
 		pcp := packets.NewControlPacket(packets.PUBLISH)

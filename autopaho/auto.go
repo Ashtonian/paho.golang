@@ -38,9 +38,12 @@ type WebSocketConfig struct {
 // ClientConfig adds a few values, required to manage the connection, to the standard paho.ClientConfig (note that
 // conn will be ignored)
 type ClientConfig struct {
-	BrokerUrls        []*url.URL       // URL(s) for the broker (schemes supported include 'mqtt' and 'tls')
-	TlsCfg            *tls.Config      // Configuration used when connecting using TLS
-	KeepAlive         uint16           // Keepalive period in seconds (the maximum time interval that is permitted to elapse between the point at which the Client finishes transmitting one MQTT Control Packet and the point it starts sending the next)
+	BrokerUrls            []*url.URL  // URL(s) for the broker (schemes supported include 'mqtt' and 'tls')
+	TlsCfg                *tls.Config // Configuration used when connecting using TLS
+	KeepAlive             uint16      // Keepalive period in seconds (the maximum time interval that is permitted to elapse between the point at which the Client finishes transmitting one MQTT Control Packet and the point it starts sending the next)
+	CleanStart            bool        // Clean Start flag, if true, existing session information will be cleared on every connection.
+	SessionExpiryInterval uint32      // Session Expiry Interval in seconds (if 0 the Session ends when the Network Connection is closed)
+
 	ConnectRetryDelay time.Duration    // How long to wait between connection attempts (defaults to 10s)
 	ConnectTimeout    time.Duration    // How long to wait for the connection process to complete (defaults to 10s)
 	WebSocketCfg      *WebSocketConfig // Enables customisation of the websocket connection
@@ -130,7 +133,7 @@ func (cfg *ClientConfig) buildConnectPacket() *paho.Connect {
 	cp := &paho.Connect{
 		KeepAlive:  cfg.KeepAlive,
 		ClientID:   cfg.ClientID,
-		CleanStart: true, // while persistence is not supported we should probably start clean...
+		CleanStart: cfg.CleanStart,
 	}
 
 	if len(cfg.connectUsername) > 0 {
@@ -164,6 +167,10 @@ func (cfg *ClientConfig) buildConnectPacket() *paho.Connect {
 			ResponseTopic:     cfg.willResponseTopic,
 			CorrelationData:   cfg.willCorrelationData,
 		}
+	}
+
+	if cfg.SessionExpiryInterval != 0 {
+		cp.Properties = &paho.ConnectProperties{SessionExpiryInterval: &cfg.SessionExpiryInterval}
 	}
 
 	if nil != cfg.connectPacketBuilder {

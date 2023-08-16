@@ -17,9 +17,10 @@ func TestMemoryStore(t *testing.T) {
 	for _, id := range ids {
 		pcp := packets.NewControlPacket(packets.PUBLISH)
 		pcp.Content.(*packets.Publish).PacketID = id
+		pcp.Content.(*packets.Publish).QoS = 1 // ID will only be written for QOS1+
 		pcp.Content.(*packets.Publish).Payload = []byte(fmt.Sprintf("%d", id))
 
-		if err := s.Put(pcp); err != nil {
+		if err := s.Put(id, packets.PUBLISH, pcp); err != nil {
 			t.Fatalf("failed to put: %s", err)
 		}
 	}
@@ -36,11 +37,16 @@ func TestMemoryStore(t *testing.T) {
 	}
 	ids = append(ids[:2], ids[3:]...) // keep our record in sync following delete
 
-	if p, err := s.Get(32300); err != nil {
+	if rp, err := s.Get(32300); err != nil {
 		t.Fatalf("failed to get: %s", err)
 	} else {
+		p, err := packets.ReadPacket(rp)
+		if err != nil {
+			t.Fatalf("error decoding packet: %s", err)
+		}
+
 		if p.PacketID() != 32300 {
-			t.Fatalf("unexpected packet id returned: %s", err)
+			t.Fatalf("unexpected packet id returned: %d", p.PacketID())
 		}
 		payload := p.Content.(*packets.Publish).Payload
 		if bytes.Compare(payload, []byte(fmt.Sprintf("%d", 32300))) != 0 {
@@ -79,17 +85,22 @@ func TestMemoryStoreBig(t *testing.T) {
 	for id := uint16(1); id != 0; id++ {
 		pcp := packets.NewControlPacket(packets.PUBLISH)
 		pcp.Content.(*packets.Publish).PacketID = id
+		pcp.Content.(*packets.Publish).QoS = 1 // ID will only be written for QOS1+
 		pcp.Content.(*packets.Publish).Payload = []byte(fmt.Sprintf("%d", id))
 
-		if err := s.Put(pcp); err != nil {
+		if err := s.Put(id, packets.PUBLISH, pcp); err != nil {
 			t.Fatalf("failed to put: %s", err)
 		}
 	}
 
 	for id := uint16(1); id != 0; id++ {
-		pcp, err := s.Get(id)
+		rp, err := s.Get(id)
 		if err != nil {
 			t.Fatal("getting missing item should fail")
+		}
+		pcp, err := packets.ReadPacket(rp)
+		if err != nil {
+			t.Fatalf("error decoding packet: %s", err)
 		}
 		sId := pcp.Content.(*packets.Publish).PacketID
 		if id != sId {

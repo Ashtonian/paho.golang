@@ -131,6 +131,44 @@ func (c *ControlPacket) PacketType() string {
 	}[c.FixedHeader.Type]
 }
 
+// String implements Stringer (mainly for debugging purposes)
+func (c *ControlPacket) String() string {
+	switch p := c.Content.(type) {
+	case *Connect:
+		return p.String()
+	case *Connack:
+		return p.String()
+	case *Publish:
+		return p.String()
+	case *Puback:
+		return p.String()
+	case *Pubrec:
+		return p.String()
+	case *Pubrel:
+		return p.String()
+	case *Pubcomp:
+		return p.String()
+	case *Subscribe:
+		return p.String()
+	case *Suback:
+		return p.String()
+	case *Unsubscribe:
+		return p.String()
+	case *Unsuback:
+		return p.String()
+	case *Pingreq:
+		return p.String()
+	case *Pingresp:
+		return p.String()
+	case *Disconnect:
+		return p.String()
+	case *Auth:
+		return p.String()
+	default:
+		return fmt.Sprintf("Unknown packet type: %d", c.Type)
+	}
+}
+
 // NewControlPacket takes a packetType and returns a pointer to a
 // ControlPacket where the VariableHeader field is a pointer to an
 // instance of a VariableHeader definition for that packetType

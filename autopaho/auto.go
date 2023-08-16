@@ -217,7 +217,6 @@ func NewConnection(ctx context.Context, cfg ClientConfig) (*ConnectionManager, e
 			cliCfg := cfg
 			cliCfg.OnClientError = eh.onClientError
 			cliCfg.OnServerDisconnect = eh.onServerDisconnect
-
 			cli, connAck := establishBrokerConnection(innerCtx, cliCfg)
 			if cli == nil {
 				break mainLoop // Only occurs when context is cancelled
@@ -238,12 +237,12 @@ func NewConnection(ctx context.Context, cfg ClientConfig) (*ConnectionManager, e
 				eh.shutdown() // Prevent any errors triggered by closure of context from reaching user
 				// As the connection is up, we call disconnect to shut things down cleanly
 				if err = c.cli.Disconnect(&paho.Disconnect{ReasonCode: 0}); err != nil {
-					cfg.Debug.Printf("disconnect returned error: %s\n", err)
+					cfg.Debug.Printf("mainLoop: disconnect returned error: %s\n", err)
 				}
 				if ctx.Err() != nil { // If this is due to outer context being cancelled, then this will have happened before the inner one gets cancelled.
-					cfg.Debug.Printf("broker connection handler exiting due to context: %s\n", ctx.Err())
+					cfg.Debug.Printf("mainLoop: broker connection handler exiting due to context: %s\n", ctx.Err())
 				} else {
-					cfg.Debug.Printf("broker connection handler exiting due to Disconnect call: %s\n", innerCtx.Err())
+					cfg.Debug.Printf("mainLoop: broker connection handler exiting due to Disconnect call: %s\n", innerCtx.Err())
 				}
 				break mainLoop
 			}
@@ -251,9 +250,9 @@ func NewConnection(ctx context.Context, cfg ClientConfig) (*ConnectionManager, e
 			c.cli = nil
 			c.connUp = make(chan struct{})
 			c.mu.Unlock()
-			cfg.Debug.Printf("connection to broker lost (%s); will reconnect\n", err)
+			cfg.Debug.Printf("mainLoop: connection to broker lost (%s); will reconnect\n", err)
 		}
-		cfg.Debug.Println("connection manager has terminated")
+		cfg.Debug.Println("mainLoop: connection manager has terminated")
 	}()
 	return &c, nil
 }
@@ -337,4 +336,14 @@ func (c *ConnectionManager) Publish(ctx context.Context, p *paho.Publish) (*paho
 		return nil, ConnectionDownError
 	}
 	return cli.Publish(ctx, p)
+}
+
+// TerminateConnectionForTest closes the active connection (if any). This function is intended for testing only, it
+// simulates connection loss which supports testing QOS1 and 2 message delivery.
+func (c *ConnectionManager) TerminateConnectionForTest() {
+	c.mu.Lock()
+	if c.cli != nil {
+		c.cli.Conn.Close()
+	}
+	c.mu.Unlock()
 }

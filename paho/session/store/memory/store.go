@@ -1,7 +1,11 @@
 package memory
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"sync"
 
 	"github.com/eclipse/paho.golang/packets"
@@ -13,8 +17,8 @@ var (
 
 // memoryPacket is an element in the memory store
 type memoryPacket struct {
-	c int                    // message count (used for ordering; as this is 32 bit min chance of rolling over seems remote)
-	p *packets.ControlPacket // the packet we are storing
+	c int    // message count (used for ordering; as this is 32 bit min chance of rolling over seems remote)
+	p []byte // the packet we are storing
 }
 
 // New creates a Store
@@ -34,25 +38,34 @@ type Store struct {
 }
 
 // Put stores the packet
-func (m *Store) Put(cp *packets.ControlPacket) error {
+func (m *Store) Put(packetID uint16, packetType byte, w io.WriterTo) error {
 	m.Lock()
 	defer m.Unlock()
-	m.data[cp.PacketID()] = memoryPacket{
+	var buff bytes.Buffer
+	// TODO: Handle errors! (not really applicable here but if writing to disk there is a potential for errors)
+	bw := bufio.NewWriter(&buff)
+	_, err := w.WriteTo(bw)
+	bw.Flush()
+	if err != nil {
+		panic(err)
+	}
+
+	m.data[packetID] = memoryPacket{
 		c: m.c,
-		p: cp,
+		p: buff.Bytes(),
 	}
 	m.c++
 	return nil
 }
 
-func (m *Store) Get(packetID uint16) (*packets.ControlPacket, error) {
+func (m *Store) Get(packetID uint16) (io.Reader, error) {
 	m.Lock()
 	defer m.Unlock()
 	d, ok := m.data[packetID]
 	if !ok {
 		return nil, ErrNotInStore
 	}
-	return d.p, nil
+	return bytes.NewReader(d.p), nil
 }
 
 // Delete removes the message with the specified store ID
@@ -94,4 +107,19 @@ func (m *Store) Reset() error {
 	defer m.Unlock()
 	m.data = make(map[uint16]memoryPacket)
 	return nil
+}
+
+// String is for debugging purposes; it dumps the content of the store in a readable format
+func (m *Store) String() string {
+	var b bytes.Buffer
+	for i, c := range m.data {
+		p, err := packets.ReadPacket(bytes.NewReader(c.p))
+		if err != nil {
+			b.WriteString(fmt.Sprintf("packet %d could not be read: %s\n", i, err))
+			continue
+		}
+
+		b.WriteString(fmt.Sprintf("packet %d is %s\n", i, p))
+	}
+	return b.String()
 }

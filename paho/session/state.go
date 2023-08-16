@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho/session/store/memory"
+	"golang.org/x/sync/semaphore"
 )
 
 // The Session State, as per the MQTT spec, contains:
@@ -62,11 +64,11 @@ const (
 )
 
 type (
-	// PacketIdAndType must be implemented by any packets to be sent with a packet identifier
-	PacketIdAndType interface {
-		packets.Packet
+	// Packet provides sufficient functionality to enable a packet to be transmitted with a packet identifier
+	Packet interface {
 		SetIdentifier(uint16) // Sets the packet identifier
 		Type() byte           // Gets the packet type
+		WriteTo(io.Writer) (int64, error)
 	}
 
 	// clientGenerated holds information on client-generated packets (e.g. an outgoing SUBSCRIBE request)
@@ -99,8 +101,15 @@ type State struct {
 	serverPackets map[uint16]byte // The last packet received from the server with this ID (cleared when the transaction is complete)
 	serverStore   storer          // Used to store session state that survives connection loss
 
-	// queue
-	queueActive bool // if true there is data in the queue (this must be sent before anything else)
+	// ensuring there are not too many messages in flight is a bit tricky; we really need to do it here because upon
+	// connection thee may already be messages in flight (and we need to resend the PUBLISH or PUBREL's). The challenge
+	// then becomes working out how the client communicates with this (ideally it should be able to check if there is
+	// a slot and, if not, place the message in a queue for later delivery).
+	// Have to just assume that the CONACK will never contain a "Receive Maximum" lower than the number of messages
+	// currently in flight (it would be impossible to comply with this).
+	// For now inflight is created when we first connect and is not updated on subsequent connections (this should
+	// probably be addressed at some point but should be fine in most circumstances).
+	inflight *semaphore.Weighted
 
 	debug  Logger
 	errors Logger
@@ -145,13 +154,8 @@ func (s *State) Close() error {
 // established. This indicates that a new connection is live and the passed in connection should be used going forward.
 // It is also the trigger to resend any queued messages. Note that this function should not be called concurrently with
 // others (we should not begin sending/receiving packets until after the CONACK has been processed).
-//
 // TODO: Add errors() function so we can notify the client of errors whilst transmitting the session stuff?
 // TODO: send any packets in the state that need to be retransmitted.
-// For this I think we need a send queue of some form; stuff from the session MUST be sent first (To retain packet order)
-// then we need some form of queue when `Publish` is called and there are no slots available (queue with no ID)
-// Ideally the `queue` needs to be controlled by another store so that the messages are not held in RAM. Would be
-// nice if there is a way to continue adding them when the connection is down.
 func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.Connack) {
 	// We could use cp.Properties.SessionExpiryInterval /  ca.Properties.SessionExpiryInterval to clear the session
 	// after the specified time period (if the Session Expiry Interval is absent the value in the CONNECT Packet used)
@@ -164,17 +168,18 @@ func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.
 	}
 	s.conn = conn
 
-	// If the server indicates that this is a cleansession we empty any saved session state
-	if !ca.SessionPresent {
-		s.clean()
-	}
-
 	// If the Server accepts a connection with Clean Start set to 1, the Server MUST set Session Present to 0 in the
 	// CONNACK packet in addition to setting a 0x00 (Success) Reason Code in the CONNACK packet [MQTT-3.2.2-2].
 	// If the Server accepts a connection with Clean Start set to 0 and the Server has Session State for the ClientID,
 	// it MUST set Session Present to 1 in the CONNACK packet, otherwise it MUST set Session Present to 0 in the CONNACK
 	// packet. In both cases, it MUST set a 0x00 (Success) Reason Code in the CONNACK packet [MQTT-3.2.2-3].
-	//
+	if !ca.SessionPresent {
+		s.debug.Println("no session present - cleaning session state")
+		s.clean()
+	}
+	inFlight := uint16(len(s.clientPackets))
+	s.debug.Printf("%d inflight transactions upon connection", inFlight)
+
 	// If the Session Expiry Interval is absent the value 0 is used. If it is set to 0, or is absent, the Session ends
 	// when the Network Connection is closed (3.1.2.11.2).
 	if ca.Properties != nil && ca.Properties.SessionExpiryInterval != nil {
@@ -183,9 +188,52 @@ func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.
 		s.sessionExpiryInterval = 0
 	}
 
-	// We need to send all queued packets - howto? This may block so we don't really want to just send all packets
-	// here with the mu locked (as there may well be responses coming in the other direction)
-	// Questions - managing the maximum transmit etc
+	// For now inflight is created when we first connect and is not updated on subsequent connections (this should
+	// probably be addressed at some point but should be fine in most circumstances because I believe it's unlikely to
+	// change).
+	if s.inflight == nil {
+		recvMax := uint16(65535) // Default as per MQTT spec
+		if ca.Properties != nil && ca.Properties.ReceiveMaximum != nil {
+			recvMax = *ca.Properties.ReceiveMaximum
+		}
+
+		// Not sure how to deal with the situation where there are more inflight messages in the session than the
+		// broker permits - suspect this will probably never happen, but it cannot be ruled out
+		if inFlight > recvMax {
+			s.errors.Printf("RecieveMaximum from broker (%d) is less than the messages currently in flight (%d)", recvMax, inFlight)
+			recvMax = inFlight
+		}
+		s.inflight = semaphore.NewWeighted(int64(recvMax))
+
+		if inFlight > 0 {
+			s.debug.Printf("acquiring semaphore with %d weight", inFlight)
+			if err := s.inflight.Acquire(context.Background(), int64(inFlight)); err != nil { // should never block or error
+				s.errors.Println("Failed to acquire semaphore whilst handling CONACK", err)
+			}
+			s.debug.Printf("acquired semaphore with %d weight", inFlight)
+		}
+	}
+
+	// Now we need to resend any packets in the store; we don't want this to block so do this in a goroutine
+	// which is passed the connection (meaning that if it drops the remaining sends will fail)
+	var toResend []uint16
+	for i := range s.clientPackets {
+		toResend = append(toResend, i)
+	}
+	go func(store storer, conn io.Writer, ids []uint16) {
+		for _, id := range ids {
+			cp, err := s.clientStore.Get(id)
+			if err != nil {
+				s.errors.Printf("failed to load packet %d from store: %s", id, err)
+				continue
+			}
+			// TODO: Should probably notify client when this happens so reconnect happens (but this should get picked
+			// up by ping eventually so is OK for now).
+			if _, err := io.Copy(conn, cp); err != nil {
+				s.errors.Printf("failed to send packet %d from store over network: %s", id, err)
+			}
+		}
+	}(s.clientStore, conn, toResend)
 }
 
 // ConnectionLost will be called when the connection is lost; either because we received a DISCONNECT packet or due
@@ -220,29 +268,24 @@ func (s *State) connectionLost(dp *packets.Disconnect) error {
 // This function is responsible for assigning the Packet Identifier.
 // If a nil error is returned, we guarantee that one, and only one, message will be sent to resp (assuming `Close()`
 // is called).
-func (s *State) StartTransaction(packet PacketIdAndType, resp chan<- packets.ControlPacket) error {
+func (s *State) StartTransaction(ctx context.Context, packet Packet, resp chan<- packets.ControlPacket) error {
+	if packet.Type() == packets.PUBLISH { // PUBLISH packets need to adhere to RECEIVE MAXIMUM in CONACK
+		s.mu.Lock() // There may be a delay waiting for semaphore so check for connection before and after
+		if s.conn == nil {
+			s.mu.Unlock()
+			return ErrNoConnection
+		}
+		s.mu.Unlock()
+
+		// Ensure only "RECEIVE MAXIMUM" messages are in flight at any time
+		if err := s.inflight.Acquire(ctx, 1); err != nil {
+			return err
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Basic logic... PUBLISH packets only
-	// if we have a queue and queueActive is true then
-	//     write the message to the queue
-	//     if !queue.Immutable() then send error thingy to client
-	//     return
-	// otherwise attempt to gain semaphore; if this fails
-	//     add item to queue
-	//     set queueActive = true
-	//     start go routine that transmits from queue
-	//     if !queue.Immutable() then send error thingy to client
-	//     return as above
-	//
-	// Question: How do we shutdown the goroutine (on close?)
-	// ALTERNATIVE - just send a special error if packet needs to be queued and provide a way to be notified when
-	//               there is space? (use a sync.Cond for this and call Broadcast everytime a semaphore is freed?
-	//    LIKE THIS IDEA - it moves the queuing to the user (i.e. Autopaho) so reduces complexity here)
-	//    Could be simpler - just do nonblocking send on a channel every time semaphore is freed?
-
-	//
 	if s.conn == nil {
 		return ErrNoConnection
 	}
@@ -251,6 +294,9 @@ func (s *State) StartTransaction(packet PacketIdAndType, resp chan<- packets.Con
 		return err
 	}
 	packet.SetIdentifier(mid)
+	if packet.Type() == packets.PUBLISH {
+		s.clientStore.Put(mid, packet.Type(), packet)
+	}
 	if _, err := packet.WriteTo(s.conn); err != nil {
 		// Should we clear error in this case? Probably not as it should be in store
 		return err
@@ -326,7 +372,7 @@ func (s *State) ack(pb *packets.Publish) error {
 		// We need to record the fact that a PUBREC has been sent so we can detect receipt of a duplicate `PUBLISH`
 		// (which should not be passed to the client app)
 		cp := pr.ToControlPacket()
-		s.serverStore.Put(cp)
+		s.serverStore.Put(pb.PacketID, packets.PUBREC, cp)
 		s.serverPackets[pb.PacketID] = cp.Type
 	default:
 		err = errors.New("ack called but publish not QOS 1 or 2")
@@ -355,6 +401,7 @@ func (s *State) PacketReceived(recv *packets.ControlPacket, pubChan chan<- *pack
 	case *packets.Puback: // QOS 1 initial (and final) response
 		s.debug.Println("received PUBACK packet with id ", rp.PacketID)
 		s.clientStore.Delete(rp.PacketID)
+		s.inflight.Release(1)
 		s.endClientGenerated(rp.PacketID, recv)
 		return nil
 	case *packets.Pubrec: // Initial response to a QOS2 Publish
@@ -392,6 +439,7 @@ func (s *State) PacketReceived(recv *packets.ControlPacket, pubChan chan<- *pack
 	case *packets.Pubcomp: // QOS 2 final response
 		s.debug.Printf("received PUBCOMP packet with id %d", rp.PacketID)
 		s.clientStore.Delete(rp.PacketID)
+		s.inflight.Release(1)
 		s.endClientGenerated(rp.PacketID, recv)
 		return nil
 		//

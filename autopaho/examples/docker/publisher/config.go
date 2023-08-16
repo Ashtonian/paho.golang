@@ -17,6 +17,8 @@ const (
 	envClientID  = "pubdemo_clientID"  // client id to connect with
 	envTopic     = "pubdemo_topic"     // topic to publish on
 	envQos       = "pubdemo_qos"       // qos to utilise when publishing
+	// envDropAfter is for testing; when set the connection will be dropped after each n seconds (potentially disrupting handshake)
+	envDropAfter = "pubdemo_dropConnectionAfterSecs"
 
 	envKeepAlive            = "pubdemo_keepAlive"            // seconds between keep alive packets
 	envConnectRetryDelay    = "pubdemo_connectRetryDelay"    // milliseconds to delay between connection attempts
@@ -36,6 +38,8 @@ type config struct {
 	keepAlive            uint16        // seconds between keepalive packets
 	connectRetryDelay    time.Duration // Period between connection attempts
 	delayBetweenMessages time.Duration // Period between publishing messages
+
+	dropAfter time.Duration // Connection will be dropped after each period
 
 	printMessages bool // If true then published messages will be written to the console
 	debug         bool // autopaho and paho debug output requested
@@ -73,6 +77,13 @@ func getConfig() (config, error) {
 		return config{}, err
 	}
 	cfg.keepAlive = uint16(iKa)
+
+	da, _ := intFromEnv(envDropAfter) // Ignore errors (0 means don't drop)
+	if da == 0 {
+		cfg.dropAfter = time.Hour * 24 // don't expect this to run for more than a day!
+	} else {
+		cfg.dropAfter = time.Duration(da) * time.Second
+	}
 
 	if cfg.connectRetryDelay, err = milliSecondsFromEnv(envConnectRetryDelay); err != nil {
 		return config{}, err

@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestMidAllocateAndFreeAll checks that we can allocate all message identifiers and that, when freed, a message is always
+// TestPacketIdAllocateAndFreeAll checks that we can allocate all packet identifiers and that, when freed, a message is always
 // sent to the response channel
-func TestMidAllocateAndFreeAll(t *testing.T) {
+func TestPacketIdAllocateAndFreeAll(t *testing.T) {
 	ss := NewInMemory()
 
 	// Use full band
@@ -21,6 +21,10 @@ func TestMidAllocateAndFreeAll(t *testing.T) {
 		v, _ := ss.allocateNextMid(packets.PUBLISH, cpChan)
 		assert.Equal(t, i, v)
 	}
+
+	// Trying to allocate another ID should fail
+	_, err := ss.allocateNextMid(packets.PUBLISH, cpChan)
+	assert.ErrorIs(t, err, ErrorPacketIdentifiersExhausted)
 
 	// Free all Mids
 	allResponded := make(chan struct{})
@@ -79,8 +83,8 @@ func TestMidAllocateAndFreeAll(t *testing.T) {
 	}
 }
 
-// TestMidHoles confirms that random "holes" within the Message ID map will be found and utilised
-func TestMidHoles(t *testing.T) {
+// TestPacketIdHoles confirms that random "holes" within the packet ID map will be found and utilised
+func TestPacketIdHoles(t *testing.T) {
 	ss := NewInMemory()
 
 	// For this test we ignore responses
@@ -121,8 +125,8 @@ func TestMidHoles(t *testing.T) {
 	}
 }
 
-// Expecting MIDs.Free(0) always do nothing (no panic), because 0 identifier is invalid and ignored.
-func TestMIDsFreeZeroID(t *testing.T) {
+// Expecting TestPAcketIdsFreeZeroID.Free(0) always do nothing (no panic), because 0 identifier is invalid and ignored.
+func TestPAcketIdsFreeZeroID(t *testing.T) {
 	ss := NewInMemory()
 
 	resp := packets.ControlPacket{

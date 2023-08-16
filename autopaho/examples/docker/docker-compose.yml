@@ -34,7 +34,8 @@ services:
       pubdemo_qos: 1
       pubdemo_keepAlive: 30
       pubdemo_connectRetryDelay: 10000
-      pubdemo_delayBetweenMessages: 1000
+      pubdemo_delayBetweenMessages: 10
+      pubdemo_dropConnectionAfterSecs: 5
       pubdemo_printMessages: "true"
       pubdemo_debug: "true"
     networks:
@@ -59,7 +60,7 @@ services:
       subdemo_writeToStdout: "true"
       subdemo_writeToDisk: "false"
       subdemo_OutputFile: "/binds/receivedMessages.txt"
-      subdemo_debug: "true"
+      subdemo_debug: "false"
     networks:
       - test-net
 # Dependency commented out because subscriber should run (will not be all that useful) even when mosquitto is down

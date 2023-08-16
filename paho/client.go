@@ -12,7 +12,6 @@ import (
 
 	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho/session"
-	"golang.org/x/sync/semaphore"
 )
 
 type MQTTVersion byte
@@ -91,7 +90,6 @@ type (
 		workers        sync.WaitGroup
 		serverProps    CommsProperties
 		clientProps    CommsProperties
-		serverInflight *semaphore.Weighted
 		debug          Logger
 		errors         Logger
 	}
@@ -292,10 +290,7 @@ func (c *Client) Connect(ctx context.Context, cp *Connect) (*Connack, error) {
 		c.serverProps.SharedSubAvailable = ca.Properties.SharedSubAvailable
 	}
 
-	c.serverInflight = semaphore.NewWeighted(int64(c.serverProps.ReceiveMaximum))
 	c.Session.ConAckReceived(c.Conn, ccp, caPacket)
-	// TODO if session is present then there will already be transactions in flight so we need to
-	// allocate these - this is even more of a reason to move the semaphore into the session
 
 	c.debug.Println("received CONNACK, starting PingHandler")
 	c.workers.Add(1)
@@ -510,7 +505,9 @@ func (c *Client) close() {
 func (c *Client) error(e error) {
 	c.debug.Println("error called:", e)
 	c.close()
+	c.debug.Println("waiting on workers")
 	c.workers.Wait()
+	c.debug.Println("workers done")
 	go c.OnClientError(e)
 }
 
@@ -596,7 +593,7 @@ func (c *Client) Subscribe(ctx context.Context, s *Subscribe) (*Suback, error) {
 	c.debug.Printf("subscribing to %+v", s.Subscriptions)
 
 	ret := make(chan packets.ControlPacket, 1)
-	if err := c.Session.StartTransaction(s.Packet(), ret); err != nil {
+	if err := c.Session.StartTransaction(ctx, s.Packet(), ret); err != nil {
 		return nil, err
 	}
 
@@ -653,7 +650,7 @@ func (c *Client) Subscribe(ctx context.Context, s *Subscribe) (*Suback, error) {
 func (c *Client) Unsubscribe(ctx context.Context, u *Unsubscribe) (*Unsuback, error) {
 	c.debug.Printf("unsubscribing from %+v", u.Topics)
 	ret := make(chan packets.ControlPacket, 1)
-	if err := c.Session.StartTransaction(u.Packet(), ret); err != nil {
+	if err := c.Session.StartTransaction(ctx, u.Packet(), ret); err != nil {
 		return nil, err
 	}
 
@@ -704,9 +701,10 @@ func (c *Client) Unsubscribe(ctx context.Context, u *Unsubscribe) (*Unsuback, er
 }
 
 // Publish is used to send a publication to the MQTT server.
-// It is passed a pre-prepared Publish packet and blocks waiting for
-// the appropriate response, or for the timeout to fire.
+// It is passed a pre-prepared Publish packet and blocks waiting for the appropriate response, or for the timeout to fire.
 // Any response message is returned from the function, along with any errors.
+// Note that a message may still be delivered even if Publish times out (once the message is part of the session state
+// delivery it may even be delivered following an application restart).
 // Warning: Publish may outlive the connection when QOS1+ (managed in `session_state`)
 func (c *Client) Publish(ctx context.Context, p *Publish) (*PublishResponse, error) {
 	if p.QoS > c.serverProps.MaximumQoS {
@@ -751,14 +749,12 @@ func (c *Client) publishQoS12(ctx context.Context, pb *packets.Publish) (*Publis
 	c.debug.Println("sending QoS12 message")
 	pubCtx, cf := context.WithTimeout(ctx, c.PacketTimeout)
 	defer cf()
-	// TODO: Should serverInflight be handled here or in sessionState? (possibly easier in state?)
-	if err := c.serverInflight.Acquire(pubCtx, 1); err != nil {
-		return nil, err
-	} // buggy linked to context passed into Publish but what happens when connection closed (I guess preceeding locks release and we then run producing an error)
-	defer c.serverInflight.Release(1)
 
+	// TODO: Would like better option for handling inflight messages (e.g. the ability to request the semaphore in advance
+	// so messages can be queued to disk if this is rejected - there is no point in keeping everything in memory if
+	// it may take days before
 	ret := make(chan packets.ControlPacket, 1)
-	if err := c.Session.StartTransaction(pb, ret); err != nil {
+	if err := c.Session.StartTransaction(ctx, pb, ret); err != nil {
 		return nil, err
 	}
 
@@ -859,12 +855,16 @@ func (c *Client) Disconnect(d *Disconnect) error {
 // and sets it to be used by the debug log endpoint
 func (c *Client) SetDebugLogger(l Logger) {
 	c.debug = l
-	c.Session.SetDebugLogger(l)
+	if c.autoCloseSession { // If we created the session store then it should use the same logger
+		c.Session.SetDebugLogger(l)
+	}
 }
 
 // SetErrorLogger takes an instance of the paho Logger interface
 // and sets it to be used by the error log endpoint
 func (c *Client) SetErrorLogger(l Logger) {
 	c.errors = l
-	c.Session.SetErrorLogger(l)
+	if c.autoCloseSession { // If we created the session store then it should use the same logger
+		c.Session.SetErrorLogger(l)
+	}
 }

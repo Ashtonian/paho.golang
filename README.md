@@ -27,14 +27,22 @@ is in progress.
 
 ## TODO
 
-// Resend packets from the state
 // Load the session state from storage (currently only memory persistence is supported)
 // Improve error handling (difficult to know what to do when the store fails - not one "best" answer)
+// Add a lot more tests
 
+### Ability to queue messages before an ID is allocated  (New requirement for consideration)
 
-// Queue publish packets before they get allocated an ID (how do we handle acknowledging these? do we want to store all of the chans??)
-// Ref above think this should become provide a mechanism for client to know when it may be possible to publish a message (enabling autopaho to queue up publish packets itself)
-// could, perhaps, wait for context to expire and then return a specific error re semaphore? 
+A common use case keep publishing messages with the expectation that the library to ensure they get sent. This is 
+something I'm keen to support in `autopaho` (and regardless, something that it must be possible to accomplish).
+
+To support this we would want to queue messages when:
+    * The connection is down (can be easily added to autopaho)
+    * Receive Maximum limit has been hit, so we cannot currently send another message
+
+The second point is currently a problem. Ideally we would not want to pass these messages to `paho` until it's ready for
+them because it should be possible for them to be stored to disk (the link may go down for a significant period so the
+queued messages may be of a considerable size).
 
 ## Issues
 
@@ -54,6 +62,14 @@ the store (because each store is specific to one broker/ClientID combination).
 The client effectively ignores SessionExpiryInterval when it comes to managing state. I don't believe this is an issue 
 because the servers `CONNACK` will include the Session Present flag, which will inform us if the session has expired. 
 Users may wish to clear session information to save on storage, this is not something the library currently supports.
+
+### Inflight Message tracking
+
+This gets a bit tricky with a session because there are messages inflight before the connection comes up. As such the
+semaphore has been moved into `sessionState`. Currently, the Receive Maximum from the first CONNACK is used regardless 
+of any potential changes in future connections (it seems fairly unlikely that the value will change but its possible).
+This is fixable but will need to be carefully managed to avoid races so is being left for now (there were issues with the
+way this was handled previously too, so I don;t see it as a big issue).
 
 ## Breaking changes:
 

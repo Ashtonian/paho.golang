@@ -1,6 +1,7 @@
 package paho
 
 import (
+	"context"
 	"io"
 
 	"github.com/eclipse/paho.golang/packets"
@@ -22,8 +23,7 @@ type SessionManager interface {
 	// The return of an error indicates that there is an issue with the connection.
 	// If no error is returned then a message will be sent to the channel passed in. This message may be nil (if the
 	// session ends before a response is received).
-	// TODO: Queuing publish packets
-	StartTransaction(session.PacketIdAndType, chan<- packets.ControlPacket) error
+	StartTransaction(context.Context, session.Packet, chan<- packets.ControlPacket) error
 
 	// PacketReceived must be called when any packet with a packet identifier is received. It will make any required
 	// response and pass any publish messages that need to be passed to the user via the channel.

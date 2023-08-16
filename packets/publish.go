@@ -75,6 +75,11 @@ func (p *Publish) Buffers() net.Buffers {
 
 // WriteTo is the implementation of the interface required function for a packet
 func (p *Publish) WriteTo(w io.Writer) (int64, error) {
+	return p.ToControlPacket().WriteTo(w)
+}
+
+// ToControlPacket is the implementation of the interface required function for a packet
+func (p *Publish) ToControlPacket() *ControlPacket {
 	f := p.QoS << 1
 	if p.Duplicate {
 		f |= 1 << 3
@@ -83,8 +88,5 @@ func (p *Publish) WriteTo(w io.Writer) (int64, error) {
 		f |= 1
 	}
 
-	cp := &ControlPacket{FixedHeader: FixedHeader{Type: PUBLISH, Flags: f}}
-	cp.Content = p
-
-	return cp.WriteTo(w)
+	return &ControlPacket{FixedHeader: FixedHeader{Type: PUBLISH, Flags: f}, Content: p}
 }

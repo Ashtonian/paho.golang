@@ -88,8 +88,9 @@ func NewStateInfo(sent *packets.ControlPacket, qos byte, topic string, payload [
 // Instance an instance of the test broker
 // Note that many variables are not mutex protected (because they are private and only accessed from one goroutine)
 type Instance struct {
-	logger    Logger // Used to output status info to assist with debugging
-	connected atomic.Bool
+	logger         Logger // Used to output status info to assist with debugging
+	connected      atomic.Bool
+	packetReceived func(publish *packets.ControlPacket) error // Will be called when a packet is received (return error to drop connection)
 
 	// Below are not thread-safe (should only be accessed after checking connected)
 	connPktDone           bool                    // true if we have processed a CONNECT packet
@@ -210,6 +211,12 @@ func (i *Instance) processIncoming(cp *packets.ControlPacket, out chan<- *packet
 
 	i.logger.Println("packet received", cp)
 
+	if i.packetReceived != nil {
+		if err := i.packetReceived(cp); err != nil {
+			return err
+		}
+	}
+
 	// the first packet sent from the Client to the Server MUST be a CONNECT packet [MQTT-3.1.0-1].
 	if !i.connPktDone && cp.Type != packets.CONNECT {
 		disconnectInvalidPacket()
@@ -246,9 +253,13 @@ func (i *Instance) processIncoming(cp *packets.ControlPacket, out chan<- *packet
 		if p.Properties.SessionExpiryInterval != nil {
 			i.sessionExpiryInterval = *p.Properties.SessionExpiryInterval
 		}
+		// We return whatever session expiry interval was requested
+		response.Content.(*packets.Connack).Properties = &packets.Properties{
+			SessionExpiryInterval: &i.sessionExpiryInterval,
+		}
 		out <- response
 		return nil
-	case packets.PUBLISH: // client is publishing something
+	case packets.PUBLISH: // client is publishing something (warning - if client resends the same message then we will close connection again)
 		p := cp.Content.(*packets.Publish)
 		if bytes.Compare(p.Payload, []byte(CloseOnPublishReceived)) == 0 {
 			out <- nil
@@ -454,6 +465,13 @@ func (i *Instance) processIncoming(cp *packets.ControlPacket, out chan<- *packet
 	default:
 		return fmt.Errorf("unsupported packet type %d received", cp.Type)
 	}
+}
+
+// SetPacketReceivedCallback sets callback that will be called whenever a packet is received
+// If the callback returns an error the connection will be dropped
+// Note: this is not thread safe - call before sending any messages
+func (i *Instance) SetPacketReceivedCallback(callback func(publish *packets.ControlPacket) error) {
+	i.packetReceived = callback
 }
 
 // sendMessageToSubscriber starts the process of sending a message to subscriber (as the topic must be an exact match,

@@ -13,6 +13,8 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/eclipse/paho.golang/paho/session"
+	"github.com/eclipse/paho.golang/paho/session/store/memory"
 )
 
 // Connect to the broker and publish a message periodically
@@ -22,15 +24,30 @@ func main() {
 		panic(err)
 	}
 
+	// We will be publishing at various QOS levels and want the session state to survive reconnection
+	// as such we create a `session` manually (stores are also created manually so they can be output
+	// for debug purposes).
+	clientStore := memory.New()
+	serverStore := memory.New()
+	sess := session.New(clientStore, serverStore)
+	defer sess.Close()
+	if cfg.debug {
+		sess.SetErrorLogger(logger{prefix: "autoPaho sess"})
+		sess.SetDebugLogger(logger{prefix: "autoPaho sess"})
+	}
+
 	cliCfg := autopaho.ClientConfig{
-		BrokerUrls:        []*url.URL{cfg.serverURL},
-		KeepAlive:         cfg.keepAlive,
-		ConnectRetryDelay: cfg.connectRetryDelay,
-		OnConnectionUp:    func(*autopaho.ConnectionManager, *paho.Connack) { fmt.Println("mqtt connection up") },
-		OnConnectError:    func(err error) { fmt.Printf("error whilst attempting connection: %s\n", err) },
-		Debug:             paho.NOOPLogger{},
+		BrokerUrls:            []*url.URL{cfg.serverURL},
+		KeepAlive:             cfg.keepAlive,
+		ConnectRetryDelay:     cfg.connectRetryDelay,
+		OnConnectionUp:        func(*autopaho.ConnectionManager, *paho.Connack) { fmt.Println("mqtt connection up") },
+		OnConnectError:        func(err error) { fmt.Printf("error whilst attempting connection: %s\n", err) },
+		Debug:                 paho.NOOPLogger{},
+		CleanStart:            false, // the default
+		SessionExpiryInterval: 60,    // Session remains live 60 seconds after disconnect
 		ClientConfig: paho.ClientConfig{
 			ClientID:      cfg.clientID,
+			Session:       sess,
 			OnClientError: func(err error) { fmt.Printf("server requested disconnect: %s\n", err) },
 			OnServerDisconnect: func(d *paho.Disconnect) {
 				if d.Properties != nil {
@@ -63,6 +80,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		var count uint64
+		dropAt := time.Now().Add(cfg.dropAfter)
 		for {
 			// AwaitConnection will return immediately if connection is up; adding this call stops publication whilst
 			// connection is unavailable.
@@ -83,19 +101,38 @@ func main() {
 
 			// Publish will block so we run it in a goRoutine
 			go func(msg []byte) {
-				pr, err := cm.Publish(ctx, &paho.Publish{
-					QoS:     cfg.qos,
-					Topic:   cfg.topic,
-					Payload: msg,
-				})
-				if err != nil {
-					fmt.Printf("error publishing: %s\n", err)
-				} else if pr.ReasonCode != 0 && pr.ReasonCode != 16 { // 16 = Server received message but there are no subscribers
-					fmt.Printf("reason code %d received\n", pr.ReasonCode)
-				} else if cfg.printMessages {
-					fmt.Printf("sent message: %s\n", msg)
+				// It is possible that the connection may be down when we attempt to publish so we will retry until
+				// successful, or it's time to exit
+				for {
+					if ctx.Err() != nil { // Abort if context is cancelled
+						return
+					}
+
+					pr, err := cm.Publish(ctx, &paho.Publish{
+						QoS:     cfg.qos,
+						Topic:   cfg.topic,
+						Payload: msg,
+					})
+					if err != nil {
+						fmt.Printf("error publishing: %s\n", err)
+						continue
+					} else if pr.ReasonCode != 0 && pr.ReasonCode != 16 { // 16 = Server received message but there are no subscribers
+						fmt.Printf("reason code %d received\n", pr.ReasonCode)
+						return
+					} else if cfg.printMessages {
+						fmt.Printf("sent message: %s\n", msg)
+						return
+					}
 				}
 			}(msg)
+
+			if time.Now().After(dropAt) {
+				cm.TerminateConnectionForTest() // This just closes the connection (autopaho should reconnect automatically)
+				dropAt = dropAt.Add(cfg.dropAfter)
+				if cfg.printMessages {
+					fmt.Printf("connection dropped at message: %d\n", count)
+				}
+			}
 
 			select {
 			case <-time.After(cfg.delayBetweenMessages):
@@ -117,6 +154,11 @@ func main() {
 
 	wg.Wait()
 	fmt.Println("shutdown complete")
+
+	if cfg.debug { // Provide information on packets in store that may be sent on next connection
+		fmt.Printf("client store content on exit: %s\n\n", clientStore)
+		fmt.Printf("server store content on exit: %s\n\n", serverStore)
+	}
 }
 
 // logger implements the paho.Logger interface

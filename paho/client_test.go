@@ -16,7 +16,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/semaphore"
 )
 
 func TestNewClient(t *testing.T) {
@@ -174,7 +173,6 @@ func TestClientPublishQoS0(t *testing.T) {
 	require.NotNil(t, c)
 	c.SetDebugLogger(clientLogger)
 
-	c.serverInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -209,7 +207,6 @@ func TestClientPublishQoS1(t *testing.T) {
 	require.NotNil(t, c)
 	c.SetDebugLogger(clientLogger)
 
-	c.serverInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -249,7 +246,6 @@ func TestClientPublishQoS2(t *testing.T) {
 	require.NotNil(t, c)
 	c.SetDebugLogger(clientLogger)
 
-	c.serverInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -289,7 +285,6 @@ func TestClientReceiveQoS0(t *testing.T) {
 	require.NotNil(t, c)
 	c.SetDebugLogger(clientLogger)
 
-	c.serverInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -327,7 +322,6 @@ func TestClientReceiveQoS1(t *testing.T) {
 	require.NotNil(t, c)
 	c.SetDebugLogger(clientLogger)
 
-	c.serverInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -366,7 +360,6 @@ func TestClientReceiveQoS2(t *testing.T) {
 	require.NotNil(t, c)
 	c.SetDebugLogger(clientLogger)
 
-	c.serverInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -571,7 +564,6 @@ func TestReceiveServerDisconnect(t *testing.T) {
 	require.NotNil(t, c)
 	c.SetDebugLogger(clientLogger)
 
-	c.serverInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()
@@ -605,7 +597,6 @@ func TestAuthenticate(t *testing.T) {
 	require.NotNil(t, c)
 	c.SetDebugLogger(clientLogger)
 
-	c.serverInflight = semaphore.NewWeighted(10000)
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
 	go c.incoming()

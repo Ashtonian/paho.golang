@@ -55,11 +55,12 @@ func (e *errorHandler) handleError(err error) bool {
 	e.errChan = nil
 	e.mu.Unlock()
 	if errChan != nil {
-		e.debug.Printf("received error: %s", err)
+		e.debug.Printf("handleError received error: %s", err)
 		errChan <- err
+		e.debug.Printf("handleError passed error on: %s", err)
 		return true
 	}
-	e.debug.Printf("received extra error: %s", err)
+	e.debug.Printf("handleError received extra error: %s", err)
 	return false
 }
 

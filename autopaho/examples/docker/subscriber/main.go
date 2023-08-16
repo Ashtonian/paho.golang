@@ -96,7 +96,16 @@ func main() {
 	signal.Notify(sig, os.Interrupt)
 	signal.Notify(sig, syscall.SIGTERM)
 
-	<-sig
+connectedLoop:
+	for {
+		select {
+		case <-sig:
+			break connectedLoop
+		case <-time.After(cfg.dropAfter): // Periodically drop connection to check session works
+			cm.TerminateConnectionForTest()
+		}
+
+	}
 	fmt.Println("signal caught - exiting")
 
 	// We could cancel the context at this point but will call Disconnect instead (this waits for autopaho to shutdown)

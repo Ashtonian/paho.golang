@@ -17,6 +17,8 @@ const (
 	envClientID  = "subdemo_clientID"  // client id to connect with
 	envTopic     = "subdemo_topic"     // topic to publish on
 	envQos       = "subdemo_qos"       // qos to utilise when publishing
+	// envDropAfter is for testing; when set the connection will be dropped after each n seconds (potentially disrupting handshake)
+	envDropAfter = "subdemo_dropConnectionAfterSecs"
 
 	envKeepAlive         = "subdemo_keepAlive"         // seconds between keepalive packets
 	envConnectRetryDelay = "subdemo_connectRetryDelay" // milliseconds to delay between connection attempts
@@ -37,6 +39,8 @@ type config struct {
 
 	keepAlive         uint16        // seconds between keepalive packets
 	connectRetryDelay time.Duration // Period between connection attempts
+
+	dropAfter time.Duration // Connection will be dropped after each period
 
 	writeToStdOut  bool   // If true received messages will be written to stdout
 	writeToDisk    bool   // if true received messages will be written to below file
@@ -77,6 +81,13 @@ func getConfig() (config, error) {
 		return config{}, err
 	}
 	cfg.keepAlive = uint16(iKa)
+
+	da, _ := intFromEnv(envDropAfter) // Ignore errors (0 means don't drop)
+	if da == 0 {
+		cfg.dropAfter = time.Hour * 24 // don't expect this to run for more than a day!
+	} else {
+		cfg.dropAfter = time.Duration(da) * time.Second
+	}
 
 	if cfg.connectRetryDelay, err = milliSecondsFromEnv(envConnectRetryDelay); err != nil {
 		return config{}, err

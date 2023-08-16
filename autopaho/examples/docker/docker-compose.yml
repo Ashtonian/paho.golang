@@ -54,9 +54,10 @@ services:
       subdemo_serverURL: ws://mosquitto:80
       subdemo_clientID: mqtt_subscriber
       subdemo_topic: topic1
-      subdemo_qos: 1
+      subdemo_qos: 2
       subdemo_keepAlive: 30
       subdemo_connectRetryDelay: 10000
+      subdemo_dropConnectionAfterSecs: 6
       subdemo_writeToStdout: "true"
       subdemo_writeToDisk: "false"
       subdemo_OutputFile: "/binds/receivedMessages.txt"

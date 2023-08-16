@@ -37,10 +37,12 @@ func main() {
 	}
 
 	cliCfg := autopaho.ClientConfig{
-		BrokerUrls:            []*url.URL{cfg.serverURL},
-		KeepAlive:             cfg.keepAlive,
-		ConnectRetryDelay:     cfg.connectRetryDelay,
-		OnConnectionUp:        func(*autopaho.ConnectionManager, *paho.Connack) { fmt.Println("mqtt connection up") },
+		BrokerUrls:        []*url.URL{cfg.serverURL},
+		KeepAlive:         cfg.keepAlive,
+		ConnectRetryDelay: cfg.connectRetryDelay,
+		OnConnectionUp: func(_ *autopaho.ConnectionManager, ack *paho.Connack) {
+			fmt.Println("mqtt connection up")
+		},
 		OnConnectError:        func(err error) { fmt.Printf("error whilst attempting connection: %s\n", err) },
 		Debug:                 paho.NOOPLogger{},
 		CleanStart:            false, // the default
@@ -123,6 +125,7 @@ func main() {
 						fmt.Printf("sent message: %s\n", msg)
 						return
 					}
+					time.Sleep(500 * time.Millisecond)
 				}
 			}(msg)
 

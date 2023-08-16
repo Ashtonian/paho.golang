@@ -58,6 +58,8 @@ func TestDisconnectAfterOutgoingPublish(t *testing.T) {
 
 	// custom session because we don't want the client to close it when the connection is lost
 	session := session.NewInMemory()
+	session.SetErrorLogger(&testLog{l: t, prefix: "sessionError:"})
+	session.SetDebugLogger(&testLog{l: t, prefix: "sessionDebug:"})
 	defer session.Close()
 	connectCount := 0
 	config := ClientConfig{

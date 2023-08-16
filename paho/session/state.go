@@ -180,10 +180,13 @@ func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.
 	inFlight := uint16(len(s.clientPackets))
 	s.debug.Printf("%d inflight transactions upon connection", inFlight)
 
+	// "If the Session Expiry Interval is absent, the Session Expiry Interval in the CONNECT packet is used."
 	// If the Session Expiry Interval is absent the value 0 is used. If it is set to 0, or is absent, the Session ends
 	// when the Network Connection is closed (3.1.2.11.2).
 	if ca.Properties != nil && ca.Properties.SessionExpiryInterval != nil {
 		s.sessionExpiryInterval = *ca.Properties.SessionExpiryInterval
+	} else if cp.Properties != nil && cp.Properties.SessionExpiryInterval != nil {
+		s.sessionExpiryInterval = *cp.Properties.SessionExpiryInterval
 	} else {
 		s.sessionExpiryInterval = 0
 	}
@@ -259,6 +262,7 @@ func (s *State) connectionLost(dp *packets.Disconnect) error {
 	// The Client and Server MUST store the Session State after the Network Connection is closed if the Session Expiry
 	// Interval is greater than 0 [MQTT-3.1.2-23]
 	if s.sessionExpiryInterval == 0 {
+		s.debug.Println("sessionExpiryInterval is 0 and connection lost - cleaning session state")
 		s.clean()
 	}
 	return nil

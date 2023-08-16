@@ -31,7 +31,7 @@ services:
       pubdemo_serverURL: tcp://mosquitto:1883
       pubdemo_clientID: mqtt_publisher
       pubdemo_topic: topic1
-      pubdemo_qos: 1
+      pubdemo_qos: 2
       pubdemo_keepAlive: 30
       pubdemo_connectRetryDelay: 10000
       pubdemo_delayBetweenMessages: 10

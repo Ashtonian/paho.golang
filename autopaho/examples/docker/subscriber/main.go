@@ -13,12 +13,26 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/eclipse/paho.golang/paho/session"
+	"github.com/eclipse/paho.golang/paho/session/store/memory"
 )
 
 func main() {
 	cfg, err := getConfig()
 	if err != nil {
 		panic(err)
+	}
+
+	// We will be publishing at various QOS levels and want the session state to survive reconnection
+	// as such we create a `session` manually (stores are also created manually so they can be output
+	// for debug purposes).
+	clientStore := memory.New()
+	serverStore := memory.New()
+	sess := session.New(clientStore, serverStore)
+	defer sess.Close()
+	if cfg.debug {
+		sess.SetErrorLogger(logger{prefix: "autoPaho sess"})
+		sess.SetDebugLogger(logger{prefix: "autoPaho sess"})
 	}
 
 	// Create a handler that will deal with incoming messages
@@ -41,9 +55,12 @@ func main() {
 			}
 			fmt.Println("mqtt subscription made")
 		},
-		OnConnectError: func(err error) { fmt.Printf("error whilst attempting connection: %s\n", err) },
+		OnConnectError:        func(err error) { fmt.Printf("error whilst attempting connection: %s\n", err) },
+		CleanStart:            false, // the default
+		SessionExpiryInterval: 60,    // Session remains live 60 seconds after disconnect
 		ClientConfig: paho.ClientConfig{
 			ClientID: cfg.clientID,
+			Session:  sess,
 			Router: paho.NewSingleHandlerRouter(func(m *paho.Publish) {
 				h.handle(m)
 			}),

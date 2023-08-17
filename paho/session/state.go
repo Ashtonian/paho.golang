@@ -225,15 +225,23 @@ func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.
 	}
 	go func(store storer, conn io.Writer, ids []uint16) {
 		for _, id := range ids {
-			cp, err := s.clientStore.Get(id)
+			r, err := s.clientStore.Get(id)
 			if err != nil {
 				s.errors.Printf("failed to load packet %d from store: %s", id, err)
 				continue
 			}
-			// TODO: Should probably notify client when this happens so reconnect happens (but this should get picked
-			// up by ping eventually so is OK for now).
-			if _, err := io.Copy(conn, cp); err != nil {
-				s.errors.Printf("failed to send packet %d from store over network: %s", id, err)
+			// TODO: Should probably notify client when error occurs happens so reconnect happens (but this should get
+			//  picked up by ping eventually so is OK for now).
+			p, err := packets.ReadPacket(r)
+			if err != nil {
+				s.errors.Printf("failed to read packet %d from store: %s", id, err)
+				continue
+			}
+			if p.Type == packets.PUBLISH {
+				p.Content.(*packets.Publish).Duplicate = true
+			}
+			if _, err = p.WriteTo(conn); err != nil {
+				s.errors.Printf("failed to send packet %d (from store) over network: %s", id, err)
 			}
 		}
 	}(s.clientStore, conn, toResend)

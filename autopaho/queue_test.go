@@ -1,10 +1,12 @@
 package autopaho
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,12 +18,12 @@ import (
 )
 
 //
-// This file contains tests that focus on session state persistence and delivery of QOS1/2 messages.
+// This file contains tests that focus on confirming that queued messages are delivered
 //
 
-// TestDisconnectAfterOutgoingPublish Confirms that a QOS1/2 Publish will be resent if the connection drops before
-// the `PUBLISH` is acknowledged
-func TestDisconnectAfterOutgoingPublish(t *testing.T) {
+// TestQueuedMessages attempts to send 100 messages before the connection comes up and then 100 more afterwards (with
+// disconnects during the process).
+func TestQueuedMessages(t *testing.T) {
 	t.Parallel()
 	broker, _ := url.Parse(dummyURL)
 	serverLogger := paholog.NewTestLogger(t, "testServer:")
@@ -34,31 +36,45 @@ func TestDisconnectAfterOutgoingPublish(t *testing.T) {
 	}()
 
 	ts := testserver.New(serverLogger)
+	got200Messages := make(chan struct{}) // Closed when 200 messages received
+	var receivedPublish []*packets.Publish
+	lastDup := 0 // Position in receivedPublish of the last duplicate we received
 
-	// We will track the number of `PUBLISH` packets received at each QOS level. The test server will drop the connection
-	// the first time a packet is received at each level
-	receivedByQos := [3]int{}
 	ts.SetPacketReceivedCallback(func(cp *packets.ControlPacket) error {
 		pub, ok := cp.Content.(*packets.Publish)
 		if !ok {
 			return nil
 		}
-		receivedByQos[pub.QoS]++
-		if receivedByQos[pub.QoS] == 1 {
-			return fmt.Errorf("first message at QOS %d received, disconnecting", pub.QoS)
+		if pub.Duplicate { // Ignore duplicates if we have received them previously and they are in order
+			for i, msg := range receivedPublish {
+				if bytes.Compare(msg.Payload, pub.Payload) == 0 {
+					if i >= lastDup {
+						lastDup = i // ignoring i<lastDup means out of order messages will result in out of order receivedPublish
+						return nil
+					}
+				}
+			}
+		}
+		receivedPublish = append(receivedPublish, pub)
+		if l := len(receivedPublish); l == 200 {
+			close(got200Messages)
+		} else if l%20 == 0 {
+			return fmt.Errorf("disconnecting every 20 messages") // Test interaction of queue and store
 		}
 		return nil
 	})
 
+	// We expect messages
 	type tsConnUpMsg struct {
 		cancelFn func()        // Function to cancel test broker context
 		done     chan struct{} // Will be closed when the test broker has disconnected (and shutdown)
 	}
-	tsConnUpChan := make(chan tsConnUpMsg) // Message will be sent when test broker connection is up
-	var tsDone chan struct{}               // Set on AttemptConnection and closed when that test server connection is done
-	pahoConnUpChan := make(chan struct{})  // When autopaho reports connection is up write to channel will occur
+	pahoConnUpChan := make(chan struct{}) // Closed first time autopaho reports connection is up
+
+	var allowConnection atomic.Bool
 
 	// custom session because we don't want the client to close it when the connection is lost
+	var tsDone chan struct{} // Set on AttemptConnection and closed when that test server connection is done
 	session := state.NewInMemory()
 	session.SetErrorLogger(paholog.NewTestLogger(t, "sessionError:"))
 	session.SetDebugLogger(paholog.NewTestLogger(t, "sessionDebug:"))
@@ -70,24 +86,18 @@ func TestDisconnectAfterOutgoingPublish(t *testing.T) {
 		ConnectRetryDelay: time.Millisecond, // Retry connection very quickly!
 		ConnectTimeout:    shortDelay,       // Connection should come up very quickly
 		AttemptConnection: func(ctx context.Context, _ ClientConfig, _ *url.URL) (net.Conn, error) {
-			ctx, cancel := context.WithCancel(ctx)
-			conn, done, err := ts.Connect(ctx)
-			if err == nil { // The above may fail if attempted too quickly (before disconnect processed)
-				connectCount++
-				if connectCount == 1 {
-					tsConnUpChan <- tsConnUpMsg{cancelFn: cancel, done: done}
-				}
-			} else {
-				logger.Println("connection attempt failed", err)
-				cancel()
+			if !allowConnection.Load() {
+				return nil, fmt.Errorf("some random error")
 			}
-			tsDone = done
-			logger.Println("connection up")
+			var conn net.Conn
+			var err error
+			conn, tsDone, err = ts.Connect(ctx)
 			return conn, err
 		},
 		OnConnectionUp: func(*ConnectionManager, *paho.Connack) {
+			connectCount++
 			if connectCount == 1 {
-				pahoConnUpChan <- struct{}{}
+				close(pahoConnUpChan)
 			}
 		},
 		Debug:                 logger,
@@ -108,48 +118,52 @@ func TestDisconnectAfterOutgoingPublish(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected NewConnection success: %s", err)
 	}
+	testFmt := "Test%d"
 
-	// Wait for connection to come up
-	select {
-	case <-tsConnUpChan:
-	case <-time.After(shortDelay):
-		t.Fatal("timeout awaiting initial connection request")
+	// Transmit first 100 messages (should go into queue)
+	for i := 1; i <= 100; i++ {
+		msg := fmt.Sprintf(testFmt, i)
+		if err = cm.PublishViaQueue(ctx, &QueuePublish{
+			Publish: &paho.Publish{
+				QoS:        1,
+				Topic:      msg,
+				Properties: nil,
+				Payload:    []byte(msg),
+			},
+		}); err != nil {
+			t.Fatalf("publish %d failed", i)
+		}
+		time.Sleep(time.Millisecond) // for logging
 	}
+
+	// Allow connection to come up and wait for this to happen
+	allowConnection.Store(true)
 	select {
 	case <-pahoConnUpChan:
 	case <-time.After(shortDelay):
 		t.Fatal("timeout awaiting connection up")
 	}
 
-	// We send a QOS1 and QOS2 message; behind the scenes the callback will drop the connection ensuring that the
-	// message is not acknowledged on the first attempt
-	for qos := 1; qos <= 2; qos++ {
-		testFmt := "Test%d"
-
-		t.Logf("publish QOS %d message", qos)
-		msg := fmt.Sprintf(testFmt, qos)
-		pubResult := make(chan error)
-
-		go func() {
-			_, err := cm.Publish(ctx, &paho.Publish{
-				QoS:        byte(qos),
+	// Transmit another 100 messages
+	for i := 101; i <= 200; i++ {
+		msg := fmt.Sprintf(testFmt, i)
+		if err = cm.PublishViaQueue(ctx, &QueuePublish{
+			Publish: &paho.Publish{
+				QoS:        1,
 				Topic:      msg,
 				Properties: nil,
 				Payload:    []byte(msg),
-			})
-			pubResult <- err
-		}()
-
-		// Wait for `Publish` to complete
-		select {
-		case err := <-pubResult:
-			if err != nil {
-				t.Fatalf("publish at QOS %d failed: %s", qos, err)
-			}
-		case <-time.After(longerDelay):
-			t.Fatalf("publish at QOS %d did not complete in the time expected", qos)
+			},
+		}); err != nil {
+			t.Fatalf("publish %d failed", i)
 		}
-		t.Logf("publish QOS %d message complete", qos)
+	}
+
+	// Wait for all messages to be received
+	select {
+	case <-got200Messages:
+	case <-time.After(5 * longerDelay):
+		t.Fatal("timeout awaiting messages")
 	}
 
 	// Disconnect
@@ -180,10 +194,11 @@ func TestDisconnectAfterOutgoingPublish(t *testing.T) {
 		t.Fatal("test server did not shutdown within expected time")
 	}
 
-	// Confirm that both messages were sent twice (initial attempt then resent)
-	for qos := 1; qos <= 2; qos++ {
-		if receivedByQos[qos] != 2 {
-			t.Errorf("expected 2 messages at QOS %d, got %d", qos, receivedByQos[qos])
+	// Check that we received the expected messages, in the expected order
+	for i := 1; i <= 200; i++ {
+		exp := fmt.Sprintf(testFmt, i)
+		if string(receivedPublish[i-1].Payload) != exp {
+			t.Errorf("expected %s, got %s", exp, receivedPublish[i-1])
 		}
 	}
 

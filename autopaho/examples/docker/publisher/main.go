@@ -13,8 +13,8 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
-	"github.com/eclipse/paho.golang/paho/session"
-	"github.com/eclipse/paho.golang/paho/session/store/memory"
+	"github.com/eclipse/paho.golang/paho/log"
+	"github.com/eclipse/paho.golang/paho/store/memory"
 )
 
 // Connect to the broker and publish a message periodically
@@ -29,7 +29,7 @@ func main() {
 	// for debug purposes).
 	clientStore := memory.New()
 	serverStore := memory.New()
-	sess := session.New(clientStore, serverStore)
+	sess := state.New(clientStore, serverStore)
 	defer sess.Close()
 	if cfg.debug {
 		sess.SetErrorLogger(logger{prefix: "autoPaho sess"})
@@ -44,7 +44,7 @@ func main() {
 			fmt.Println("mqtt connection up")
 		},
 		OnConnectError:        func(err error) { fmt.Printf("error whilst attempting connection: %s\n", err) },
-		Debug:                 paho.NOOPLogger{},
+		Debug:                 log.NOOPLogger{},
 		CleanStart:            false, // the default
 		SessionExpiryInterval: 60,    // Session remains live 60 seconds after disconnect
 		ClientConfig: paho.ClientConfig{

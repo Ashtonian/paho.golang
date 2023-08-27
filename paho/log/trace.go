@@ -1,4 +1,4 @@
-package session
+package log
 
 type (
 	// Logger interface allows implementations to provide to this package any

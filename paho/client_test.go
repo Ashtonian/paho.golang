@@ -13,6 +13,7 @@ import (
 
 	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho/internal/basictestserver"
+	paholog "github.com/eclipse/paho.golang/paho/log"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,8 +45,8 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClientConnect(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "ClientConnect:"}
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	clientLogger := paholog.NewTestLogger(t, "ClientConnect:")
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -89,8 +90,8 @@ func TestClientConnect(t *testing.T) {
 }
 
 func TestClientSubscribe(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "ClientSubscribe:"}
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	clientLogger := paholog.NewTestLogger(t, "ClientSubscribe:")
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.SUBACK, &packets.Suback{
 		Reasons:    []byte{1, 2, 0},
 		Properties: &packets.Properties{},
@@ -126,8 +127,8 @@ func TestClientSubscribe(t *testing.T) {
 }
 
 func TestClientUnsubscribe(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "ClientUnsubscribe:"}
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	clientLogger := paholog.NewTestLogger(t, "ClientUnsubscribe:")
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.UNSUBACK, &packets.Unsuback{
 		Reasons:    []byte{0, 17},
 		Properties: &packets.Properties{},
@@ -162,8 +163,8 @@ func TestClientUnsubscribe(t *testing.T) {
 }
 
 func TestClientPublishQoS0(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "ClientPublishQoS0:"}
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	clientLogger := paholog.NewTestLogger(t, "ClientPublishQoS0:")
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer"))
 	go ts.Run()
 	defer ts.Stop()
 
@@ -192,8 +193,8 @@ func TestClientPublishQoS0(t *testing.T) {
 }
 
 func TestClientPublishQoS1(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "ClientPublishQoS1:"}
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	clientLogger := paholog.NewTestLogger(t, "ClientPublishQoS1:")
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.PUBACK, &packets.Puback{
 		ReasonCode: packets.PubackSuccess,
 		Properties: &packets.Properties{},
@@ -227,8 +228,8 @@ func TestClientPublishQoS1(t *testing.T) {
 }
 
 func TestClientPublishQoS2(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "ClientPublishQoS2:"}
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	clientLogger := paholog.NewTestLogger(t, "ClientPublishQoS2:")
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.PUBREC, &packets.Pubrec{
 		ReasonCode: packets.PubrecSuccess,
 		Properties: &packets.Properties{},
@@ -266,10 +267,10 @@ func TestClientPublishQoS2(t *testing.T) {
 }
 
 func TestClientReceiveQoS0(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "TestClientReceiveQoS0:"}
+	clientLogger := paholog.NewTestLogger(t, "TestClientReceiveQoS0:")
 
 	rChan := make(chan struct{})
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	go ts.Run()
 	defer ts.Stop()
 
@@ -303,10 +304,10 @@ func TestClientReceiveQoS0(t *testing.T) {
 }
 
 func TestClientReceiveQoS1(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "TestClientReceiveQoS1:"}
+	clientLogger := paholog.NewTestLogger(t, "TestClientReceiveQoS1:")
 
 	rChan := make(chan struct{})
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	go ts.Run()
 	defer ts.Stop()
 
@@ -341,10 +342,10 @@ func TestClientReceiveQoS1(t *testing.T) {
 }
 
 func TestClientReceiveQoS2(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "TestClientReceiveQoS2:"}
+	clientLogger := paholog.NewTestLogger(t, "TestClientReceiveQoS2:")
 
 	rChan := make(chan struct{})
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	go ts.Run()
 	defer ts.Stop()
 
@@ -379,9 +380,9 @@ func TestClientReceiveQoS2(t *testing.T) {
 }
 
 func TestClientReceiveAndAckInOrder(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "ClientReceiveAndAckInOrder:"}
+	clientLogger := paholog.NewTestLogger(t, "ClientReceiveAndAckInOrder:")
 
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -459,8 +460,8 @@ func TestClientReceiveAndAckInOrder(t *testing.T) {
 }
 
 func TestManualAcksInOrder(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "ManualAcksInOrder:"}
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	clientLogger := paholog.NewTestLogger(t, "ManualAcksInOrder:")
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -547,9 +548,9 @@ func TestManualAcksInOrder(t *testing.T) {
 }
 
 func TestReceiveServerDisconnect(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "ServerDisconnect:"}
+	clientLogger := paholog.NewTestLogger(t, "ServerDisconnect:")
 	rChan := make(chan struct{})
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	go ts.Run()
 	defer ts.Stop()
 
@@ -582,8 +583,8 @@ func TestReceiveServerDisconnect(t *testing.T) {
 }
 
 func TestAuthenticate(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "Authenticate:"}
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	clientLogger := paholog.NewTestLogger(t, "Authenticate:")
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.AUTH, &packets.Auth{
 		ReasonCode: packets.AuthSuccess,
 	})
@@ -662,8 +663,8 @@ func TestAuthenticateOnConnect(t *testing.T) {
 		},
 	}
 
-	clientLogger := &testLog{l: t, prefix: "AuthenticateOnConnect:"}
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	clientLogger := paholog.NewTestLogger(t, "AuthenticateOnConnect:")
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.CONNACK, &packets.Auth{
 		ReasonCode: packets.AuthContinueAuthentication,
 		Properties: &packets.Properties{
@@ -707,8 +708,8 @@ func TestAuthenticateOnConnect(t *testing.T) {
 }
 
 func TestCleanup(t *testing.T) {
-	serverLogger := testLog{l: t, prefix: "TestServer:"}
-	ts := basictestserver.New(&serverLogger)
+	serverLogger := paholog.NewTestLogger(t, "TestServer:")
+	ts := basictestserver.New(serverLogger)
 	go ts.Run()
 
 	c := NewClient(ClientConfig{
@@ -729,7 +730,7 @@ func TestCleanup(t *testing.T) {
 
 	// verify that it's possible to try again
 	ts.Stop()
-	ts = basictestserver.New(&serverLogger)
+	ts = basictestserver.New(serverLogger)
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -761,8 +762,8 @@ func TestCleanup(t *testing.T) {
 }
 
 func TestDisconnect(t *testing.T) {
-	clientLogger := &testLog{l: t, prefix: "Disconnect:"}
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	clientLogger := paholog.NewTestLogger(t, "Disconnect:")
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -805,7 +806,7 @@ func TestDisconnect(t *testing.T) {
 }
 
 func TestCloseDeadlock(t *testing.T) {
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,
@@ -853,7 +854,7 @@ func TestCloseDeadlock(t *testing.T) {
 }
 
 func TestSendOnClosedChannel(t *testing.T) {
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.CONNACK, &packets.Connack{
 		ReasonCode:     0,
 		SessionPresent: false,

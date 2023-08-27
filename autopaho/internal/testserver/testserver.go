@@ -10,6 +10,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/eclipse/paho.golang/packets"
 )
@@ -50,6 +51,8 @@ const (
 	AppendAfterActionProcessed        = `Done`                   // Appended to message body after action carried out (does not apply to Publish)
 	midInitial                 uint16 = 200                      // Server side MIDs will start here (having different start points makes the logs easier to follow)
 	midMax                     uint16 = 65535
+	outgoingChanSize                  = 100 // Size of chan for outgoing packets (enables multiple packets to be in flight)
+	delayBetweenOutdoing              = time.Millisecond
 )
 
 // Logger mirrors paho.Logger
@@ -93,8 +96,8 @@ type Instance struct {
 	packetReceived func(publish *packets.ControlPacket) error // Will be called when a packet is received (return error to drop connection)
 
 	// Below are not thread-safe (should only be accessed after checking connected)
-	connPktDone           bool                    // true if we have processed a CONNECT packet
-	sessionPresent        bool                    // true if a session exists (
+	connPktDone           bool                    // true if we have processed a CONNECT packet (ever!)
+	sessionPresent        bool                    // true if a session exists
 	sessionExpiryInterval uint32                  // as set on the most recent `connect` (we treat anything >0 as infinite)
 	subscriptions         map[string]subscription // Map from topic to subscription info
 
@@ -142,7 +145,16 @@ func (i *Instance) Connect(ctx context.Context) (net.Conn, chan struct{}, error)
 		return nil, nil, errors.New("already connected") // We only support a single connection
 	}
 	i.connPktDone = false // Connection packet should be the first thing we receive after each connection
+
+	// Note: net.Pipe is synchronous; an async pipe would probably better simulate a real connection
+	// Consider using something like github.com/grpc/grpc-go/test/bufconn/bufconn.go
+	// Output is buffered which means that there is some asynchronicity
 	userCon, ourCon := net.Pipe()
+
+	// Ensure both connections support thread safe writes
+	userCon = packets.NewThreadSafeConn(userCon)
+	ourCon = packets.NewThreadSafeConn(ourCon) // Should not be necessary but may avoid hard to spot bugs
+
 	go func() {
 		<-ctx.Done() // Ensure that we exit cleanly if context closed
 		if err := ourCon.Close(); err != nil {
@@ -150,7 +162,7 @@ func (i *Instance) Connect(ctx context.Context) (net.Conn, chan struct{}, error)
 		}
 	}()
 
-	outGoingPackets := make(chan *packets.ControlPacket)
+	outGoingPackets := make(chan *packets.ControlPacket, outgoingChanSize)
 	go func() {
 		if err := i.handleIncoming(ourCon, outGoingPackets); err != nil {
 			i.logger.Println("handleIncoming closed with error", err)
@@ -172,7 +184,7 @@ func (i *Instance) Connect(ctx context.Context) (net.Conn, chan struct{}, error)
 	}()
 
 	i.logger.Println("connection up")
-	return packets.NewThreadSafeConn(userCon), done, nil
+	return userCon, done, nil
 }
 
 // handleIncoming runs as a goroutine processing inbound data received on net.Conn until an error occurs (i.e. Conn Closed)
@@ -195,7 +207,8 @@ func (i *Instance) handleIncoming(conn io.Reader, out chan<- *packets.ControlPac
 func (i *Instance) handleOutgoing(in <-chan *packets.ControlPacket, out io.Writer) {
 	for p := range in {
 		i.logger.Println("Sending packet to client ", p)
-		_, _ = p.WriteTo(out) // We can just ignore any errors (Close will be picked up in handleIncoming, and the chan closed)
+		_, _ = p.WriteTo(out)            // We can just ignore any errors (Close will be picked up in handleIncoming, and the chan closed)
+		time.Sleep(delayBetweenOutdoing) // Slow down responses to enable multiple inflight messages
 	}
 }
 

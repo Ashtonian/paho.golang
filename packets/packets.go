@@ -231,7 +231,6 @@ func ReadPacket(r io.Reader) (*ControlPacket, error) {
 	// if cp == nil {
 	// 	return nil, fmt.Errorf("invalid packet type requested, %d", t[0]>>4)
 	// }
-
 	pt := t[0] >> 4
 	cp := &ControlPacket{FixedHeader: FixedHeader{Type: pt}}
 	switch pt {
@@ -280,6 +279,7 @@ func ReadPacket(r io.Reader) (*ControlPacket, error) {
 	cp.Flags = t[0] & 0xF
 	if cp.Type == PUBLISH {
 		cp.Content.(*Publish).QoS = (cp.Flags & 0x6) >> 1
+		cp.Content.(*Publish).Duplicate = cp.Flags&(1<<3) != 0
 	}
 	vbi, err := getVBI(r)
 	if err != nil {
@@ -297,7 +297,6 @@ func ReadPacket(r io.Reader) (*ControlPacket, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if n != int64(cp.remainingLength) {
 		return nil, fmt.Errorf("failed to read packet, expected %d bytes, read %d", cp.remainingLength, n)
 	}
@@ -311,6 +310,7 @@ func ReadPacket(r io.Reader) (*ControlPacket, error) {
 // WriteTo writes a packet to an io.Writer, handling packing all the parts of
 // a control packet.
 func (c *ControlPacket) WriteTo(w io.Writer) (int64, error) {
+	c.remainingLength = 0 // recalculate remainingLength
 	buffers := c.Content.Buffers()
 	for _, b := range buffers {
 		c.remainingLength += len(b)

@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/packets"
+	"github.com/eclipse/paho.golang/paho/log"
 	"github.com/eclipse/paho.golang/paho/session"
+	"github.com/eclipse/paho.golang/paho/session/state"
 )
 
 type MQTTVersion byte
@@ -25,6 +27,8 @@ const defaultSendAckInterval = 50 * time.Millisecond
 
 var (
 	ErrManualAcknowledgmentDisabled = errors.New("manual acknowledgments disabled")
+	ErrNetworkErrorAfterStored      = errors.New("error after packet added to state")         // Could not send packet but its stored (and response will be sent on chan at some point in the future)
+	ErrConnectionLost               = errors.New("connection lost after request transmitted") // We don't know whether the server received the request or not
 )
 
 // CPContext is the struct that is used to return responses to
@@ -50,7 +54,7 @@ type (
 		// wrapper or extend the custom net.Conn struct with sync.Locker.
 		Conn net.Conn
 
-		Session          SessionManager
+		Session          session.SessionManager
 		autoCloseSession bool
 
 		AuthHandler   Auther
@@ -90,8 +94,8 @@ type (
 		workers        sync.WaitGroup
 		serverProps    CommsProperties
 		clientProps    CommsProperties
-		debug          Logger
-		errors         Logger
+		debug          log.Logger
+		errors         log.Logger
 	}
 
 	// CommsProperties is a struct of the communication properties that may
@@ -140,12 +144,12 @@ func NewClient(conf ClientConfig) *Client {
 			TopicAliasMaximum: 0,
 		},
 		ClientConfig: conf,
-		errors:       NOOPLogger{},
-		debug:        NOOPLogger{},
+		errors:       log.NOOPLogger{},
+		debug:        log.NOOPLogger{},
 	}
 
 	if c.Session == nil {
-		c.Session = session.NewInMemory()
+		c.Session = state.NewInMemory()
 		c.autoCloseSession = true // We created `Session`, so need to close it when done (so handlers all return)
 	}
 	if c.PacketTimeout == 0 {
@@ -170,8 +174,8 @@ func NewClient(conf ClientConfig) *Client {
 // the Client instance already has a working network connection.
 // The function takes a pre-prepared Connect packet, and uses that to
 // establish an MQTT connection. Assuming the connection completes
-// successfully the rest of the client is initiated and the Connack
-// returned. Otherwise the failure Connack (if there is one) is returned
+// successfully, the rest of the client is initiated and the Connack
+// returned. Otherwise, the failure Connack (if there is one) is returned
 // along with an error indicating the reason for the failure to connect.
 func (c *Client) Connect(ctx context.Context, cp *Connect) (*Connack, error) {
 	if c.Conn == nil {
@@ -238,11 +242,10 @@ func (c *Client) Connect(ctx context.Context, cp *Connect) (*Connack, error) {
 	go c.expectConnack(caPacketCh, caPacketErr)
 	select {
 	case <-connCtx.Done():
-		if ctxErr := connCtx.Err(); ctxErr != nil {
-			c.debug.Println(fmt.Sprintf("terminated due to context: %v", ctxErr))
-		}
+		ctxErr := connCtx.Err()
+		c.debug.Println(fmt.Sprintf("terminated due to context waiting for CONNACK: %v", ctxErr))
 		cleanup()
-		return nil, connCtx.Err()
+		return nil, ctxErr
 	case err := <-caPacketErr:
 		c.debug.Println(err)
 		cleanup()
@@ -260,6 +263,11 @@ func (c *Client) Connect(ctx context.Context, cp *Connect) (*Connack, error) {
 		}
 		cleanup()
 		return ca, fmt.Errorf("failed to connect to server: %s", reason)
+	}
+
+	if err := c.Session.ConAckReceived(c.Conn, ccp, caPacket); err != nil {
+		cleanup()
+		return ca, fmt.Errorf("session error: %w", err)
 	}
 
 	// no more possible calls to cleanup(), defer an unlock
@@ -289,8 +297,6 @@ func (c *Client) Connect(ctx context.Context, cp *Connect) (*Connack, error) {
 		c.serverProps.SubIDAvailable = ca.Properties.SubIDAvailable
 		c.serverProps.SharedSubAvailable = ca.Properties.SharedSubAvailable
 	}
-
-	c.Session.ConAckReceived(c.Conn, ccp, caPacket)
 
 	c.debug.Println("received CONNACK, starting PingHandler")
 	c.workers.Add(1)
@@ -406,7 +412,7 @@ func (c *Client) incoming() {
 			}
 			switch recv.Type {
 			case packets.CONNACK:
-				c.debug.Println("received CONNACK")
+				c.debug.Println("received CONNACK (unexpected)")
 				go c.error(fmt.Errorf("received unexpected CONNACK"))
 				return
 			case packets.AUTH:
@@ -547,10 +553,9 @@ func (c *Client) Authenticate(ctx context.Context, a *Auth) (*AuthResponse, erro
 	var rp packets.ControlPacket
 	select {
 	case <-ctx.Done():
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			c.debug.Println(fmt.Sprintf("terminated due to context: %v", ctxErr))
-			return nil, ctxErr
-		}
+		ctxErr := ctx.Err()
+		c.debug.Println(fmt.Sprintf("terminated due to context waiting for AUTH: %v", ctxErr))
+		return nil, ctxErr
 	case rp = <-c.raCtx.Return:
 	}
 
@@ -593,7 +598,15 @@ func (c *Client) Subscribe(ctx context.Context, s *Subscribe) (*Suback, error) {
 	c.debug.Printf("subscribing to %+v", s.Subscriptions)
 
 	ret := make(chan packets.ControlPacket, 1)
-	if err := c.Session.StartTransaction(ctx, s.Packet(), ret); err != nil {
+	sp := s.Packet()
+	if err := c.Session.AddToSession(ctx, sp, ret); err != nil {
+		return nil, err
+	}
+
+	// From this point on the message is in store, and ret will receive something regardless of whether we succeed in
+	// writing the packet to the connection or not.
+	if _, err := sp.WriteTo(c.Conn); err != nil {
+		// The packet will remain in the session state until `Session` is notified of the disconnection.
 		return nil, err
 	}
 
@@ -604,15 +617,14 @@ func (c *Client) Subscribe(ctx context.Context, s *Subscribe) (*Suback, error) {
 
 	select {
 	case <-subCtx.Done():
-		if ctxErr := subCtx.Err(); ctxErr != nil {
-			c.debug.Println(fmt.Sprintf("terminated due to context: %v", ctxErr))
-			return nil, ctxErr
-		}
+		ctxErr := subCtx.Err()
+		c.debug.Println(fmt.Sprintf("terminated due to context waiting for SUBACK: %v", ctxErr))
+		return nil, ctxErr
 	case sap = <-ret:
 	}
 
 	if sap.Type == 0 { // default ControlPacket indicates we are shutting down
-		return nil, errors.New("SUB transmitted but not acknowledged at time of shutdown")
+		return nil, ErrConnectionLost
 	}
 
 	if sap.Type != packets.SUBACK {
@@ -650,7 +662,15 @@ func (c *Client) Subscribe(ctx context.Context, s *Subscribe) (*Suback, error) {
 func (c *Client) Unsubscribe(ctx context.Context, u *Unsubscribe) (*Unsuback, error) {
 	c.debug.Printf("unsubscribing from %+v", u.Topics)
 	ret := make(chan packets.ControlPacket, 1)
-	if err := c.Session.StartTransaction(ctx, u.Packet(), ret); err != nil {
+	up := u.Packet()
+	if err := c.Session.AddToSession(ctx, up, ret); err != nil {
+		return nil, err
+	}
+
+	// From this point on the message is in store, and ret will receive something regardless of whether we succeed in
+	// writing the packet to the connection or not
+	if _, err := up.WriteTo(c.Conn); err != nil {
+		// The packet will remain in the session state until `Session` is notified of the disconnection.
 		return nil, err
 	}
 
@@ -661,15 +681,14 @@ func (c *Client) Unsubscribe(ctx context.Context, u *Unsubscribe) (*Unsuback, er
 	c.debug.Println("waiting for UNSUBACK")
 	select {
 	case <-unsubCtx.Done():
-		if ctxErr := unsubCtx.Err(); ctxErr != nil {
-			c.debug.Println(fmt.Sprintf("terminated due to context: %v", ctxErr))
-			return nil, ctxErr
-		}
+		ctxErr := unsubCtx.Err()
+		c.debug.Println(fmt.Sprintf("terminated due to context waiting for UNSUBACK: %v", ctxErr))
+		return nil, ctxErr
 	case uap = <-ret:
 	}
 
 	if uap.Type == 0 { // default ControlPacket indicates we are shutting down
-		return nil, errors.New("unsubscribe sent but not acknowledged at time of shutdown")
+		return nil, ErrConnectionLost
 	}
 
 	if uap.Type != packets.UNSUBACK {
@@ -703,10 +722,33 @@ func (c *Client) Unsubscribe(ctx context.Context, u *Unsubscribe) (*Unsuback, er
 // Publish is used to send a publication to the MQTT server.
 // It is passed a pre-prepared Publish packet and blocks waiting for the appropriate response, or for the timeout to fire.
 // Any response message is returned from the function, along with any errors.
-// Note that a message may still be delivered even if Publish times out (once the message is part of the session state
-// delivery it may even be delivered following an application restart).
+// Note that a message may still be delivered even if Publish times out (once the message is part of the session state,
+// it may even be delivered following an application restart).
 // Warning: Publish may outlive the connection when QOS1+ (managed in `session_state`)
 func (c *Client) Publish(ctx context.Context, p *Publish) (*PublishResponse, error) {
+	return c.PublishWithOptions(ctx, p, PublishOptions{})
+}
+
+type PublishMethod int
+
+const (
+	PublishMethod_Blocking  PublishMethod = iota
+	PublishMethod_AsyncSend               // PublishWithOptions will add the message to the session and then return (no method to check status is provided)
+)
+
+// PublishOptions enables the behaviour of Publish to be modified
+type PublishOptions struct {
+	// Method enables a degree of control over how  PublishWithOptions operates
+	Method PublishMethod
+}
+
+// PublishWithOptions is used to send a publication to the MQTT server (with options to customise its behaviour)
+// It is passed a pre-prepared Publish packet and, by default, blocks waiting for the appropriate response, or for the
+// timeout to fire.
+// Note that a message may still be delivered even if Publish times out (once the message is part of the session state,
+// it may even be delivered following an application restart).
+// Warning: Publish may outlive the connection when QOS1+ (managed in `session_state`)
+func (c *Client) PublishWithOptions(ctx context.Context, p *Publish, o PublishOptions) (*PublishResponse, error) {
 	if p.QoS > c.serverProps.MaximumQoS {
 		return nil, fmt.Errorf("cannot send Publish with QoS %d, server maximum QoS is %d", p.QoS, c.serverProps.MaximumQoS)
 	}
@@ -734,38 +776,49 @@ func (c *Client) Publish(ctx context.Context, p *Publish) (*PublishResponse, err
 	case 0:
 		c.debug.Println("sending QoS0 message")
 		if _, err := pb.WriteTo(c.Conn); err != nil {
+			go c.error(err)
 			return nil, err
 		}
 		return nil, nil
 	case 1, 2:
-		return c.publishQoS12(ctx, pb)
+		return c.publishQoS12(ctx, pb, o)
 	}
 
 	return nil, fmt.Errorf("QoS isn't 0, 1 or 2")
 }
 
 // Question - what to do with context. With 0.11 this was mixed (could lock at
-func (c *Client) publishQoS12(ctx context.Context, pb *packets.Publish) (*PublishResponse, error) {
+func (c *Client) publishQoS12(ctx context.Context, pb *packets.Publish, o PublishOptions) (*PublishResponse, error) {
 	c.debug.Println("sending QoS12 message")
-	pubCtx, cf := context.WithTimeout(ctx, c.PacketTimeout)
+	// TOTO: pubCtx, cf := context.WithTimeout(ctx, c.PacketTimeout)
+	pubCtx, cf := context.WithTimeout(ctx, time.Hour)
 	defer cf()
 
-	// TODO: Would like better option for handling inflight messages (e.g. the ability to request the semaphore in advance
-	// so messages can be queued to disk if this is rejected - there is no point in keeping everything in memory if
-	// it may take days before
 	ret := make(chan packets.ControlPacket, 1)
-	if err := c.Session.StartTransaction(ctx, pb, ret); err != nil {
+	if err := c.Session.AddToSession(pubCtx, pb, ret); err != nil {
 		return nil, err
+	}
+
+	// From this point on the message is in store, and ret will receive something regardless of whether we succeed in
+	// writing the packet to the connection
+	if _, err := pb.WriteTo(c.Conn); err != nil {
+		c.debug.Printf("failed to write packet %d to connection: %s", pb.PacketID, err)
+		if o.Method == PublishMethod_AsyncSend {
+			return nil, ErrNetworkErrorAfterStored // Async send, so we don't wait for the response (may add callbacks in the future to enable user to obtain status)
+		}
+	}
+
+	if o.Method == PublishMethod_AsyncSend {
+		return nil, nil // Async send, so we don't wait for the response (may add callbacks in the future to enable user to obtain status)
 	}
 
 	var resp packets.ControlPacket
 
 	select {
 	case <-pubCtx.Done():
-		if ctxErr := pubCtx.Err(); ctxErr != nil {
-			c.debug.Println(fmt.Sprintf("terminated due to context: %v", ctxErr))
-			return nil, ctxErr
-		}
+		ctxErr := pubCtx.Err()
+		c.debug.Println(fmt.Sprintf("terminated due to context waiting for Publish ack: %v", ctxErr))
+		return nil, ctxErr
 	case resp = <-ret:
 	}
 
@@ -842,7 +895,7 @@ func (c *Client) expectConnack(packet chan<- *packets.Connack, errs chan<- error
 // (and if it does this function returns any error) the network connection
 // is closed.
 func (c *Client) Disconnect(d *Disconnect) error {
-	c.debug.Println("disconnecting")
+	c.debug.Println("disconnecting", d)
 	_, err := d.Packet().WriteTo(c.Conn)
 
 	c.close()
@@ -853,7 +906,7 @@ func (c *Client) Disconnect(d *Disconnect) error {
 
 // SetDebugLogger takes an instance of the paho Logger interface
 // and sets it to be used by the debug log endpoint
-func (c *Client) SetDebugLogger(l Logger) {
+func (c *Client) SetDebugLogger(l log.Logger) {
 	c.debug = l
 	if c.autoCloseSession { // If we created the session store then it should use the same logger
 		c.Session.SetDebugLogger(l)
@@ -862,7 +915,7 @@ func (c *Client) SetDebugLogger(l Logger) {
 
 // SetErrorLogger takes an instance of the paho Logger interface
 // and sets it to be used by the error log endpoint
-func (c *Client) SetErrorLogger(l Logger) {
+func (c *Client) SetErrorLogger(l log.Logger) {
 	c.errors = l
 	if c.autoCloseSession { // If we created the session store then it should use the same logger
 		c.Session.SetErrorLogger(l)

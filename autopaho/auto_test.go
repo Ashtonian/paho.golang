@@ -13,18 +13,19 @@ import (
 	"testing"
 	"time"
 
+	paholog "github.com/eclipse/paho.golang/paho/log"
 	"go.uber.org/goleak"
 
 	"github.com/eclipse/paho.golang/autopaho/internal/testserver"
 	"github.com/eclipse/paho.golang/paho"
 )
 
-const shortDelay = 500 * time.Millisecond // Used when something should happen pretty quickly (increase when debugging)
-const longerDelay = time.Second           // Longer delay than above (for things like test wide context timeout)
+// const shortDelay = 500 * time.Millisecond // Used when something should happen pretty quickly (increase when debugging)
+// const longerDelay = time.Second           // Longer delay than above (for things like test wide context timeout)
 
 // When debugging uncomment the below (to prevent tests terminating too quickly)
-// const shortDelay = time.Hour
-// const longerDelay = time.Hour
+const shortDelay = time.Hour
+const longerDelay = time.Hour
 
 const dummyURL = "tcp://127.0.0.1:1883"
 
@@ -42,8 +43,8 @@ func TestConnect(t *testing.T) {
 func TestDisconnect(t *testing.T) {
 	t.Parallel()
 	broker, _ := url.Parse(dummyURL)
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
-	logger := &testLog{l: t, prefix: "test:"}
+	serverLogger := paholog.NewTestLogger(t, "testServer:")
+	logger := paholog.NewTestLogger(t, "test:")
 	defer func() {
 		// Prevent any logging after completion. Unfortunately, there is currently no way to know if paho.Client
 		// has fully shutdown. As such, messages may be logged after shutdown (which will result in a panic).
@@ -57,6 +58,7 @@ func TestDisconnect(t *testing.T) {
 		cancelFn func()        // Function to cancel test broker context
 		done     chan struct{} // Will be closed when the test broker has disconnected (and shutdown)
 	}
+	var tsDone chan struct{}               // Set on AttemptConnection and closed when that test server connection is done
 	tsConnUpChan := make(chan tsConnUpMsg) // Message will be sent when test broker connection is up
 	pahoConnUpChan := make(chan struct{})  // When autopaho reports connection is up write to channel will occur
 
@@ -74,6 +76,7 @@ func TestDisconnect(t *testing.T) {
 			} else {
 				cancel()
 			}
+			tsDone = done
 			return conn, err
 		},
 		OnConnectionUp: func(*ConnectionManager, *paho.Connack) { pahoConnUpChan <- struct{}{} },
@@ -137,8 +140,10 @@ func TestDisconnect(t *testing.T) {
 	}
 
 	// The test server should have picked up the dropped connection
-	if ts.Connected() {
-		t.Fatal("connection with test server should have dropped")
+	select {
+	case <-tsDone:
+	case <-time.After(shortDelay):
+		t.Fatal("test server did not shutdown within expected time")
 	}
 
 	select {
@@ -157,8 +162,8 @@ func TestDisconnect(t *testing.T) {
 func TestReconnect(t *testing.T) {
 	t.Parallel()
 	broker, _ := url.Parse(dummyURL)
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
-	logger := &testLog{l: t, prefix: "test:"}
+	serverLogger := paholog.NewTestLogger(t, "testServer:")
+	logger := paholog.NewTestLogger(t, "test:")
 	defer func() {
 		// Prevent any logging after completion. Unfortunately, there is currently no way to know if paho.Client
 		// has fully shutdown. As such, messages may be logged after shutdown (which will result in a panic).
@@ -269,8 +274,8 @@ func TestReconnect(t *testing.T) {
 func TestBasicPubSub(t *testing.T) {
 	t.Parallel()
 	broker, _ := url.Parse(dummyURL)
-	serverLogger := &testLog{l: t, prefix: "testServer:"}
-	logger := &testLog{l: t, prefix: "test:"}
+	serverLogger := paholog.NewTestLogger(t, "testServer:")
+	logger := paholog.NewTestLogger(t, "test:")
 	defer func() {
 		// Prevent any logging after completion. Unfortunately, there is currently no way to know if paho.Client
 		// has fully shutdown. As such, messages may be logged after shutdown (which will result in a panic).

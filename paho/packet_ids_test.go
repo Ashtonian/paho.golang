@@ -7,6 +7,7 @@ import (
 
 	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho/internal/basictestserver"
+	paholog "github.com/eclipse/paho.golang/paho/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,7 +15,7 @@ import (
 // TestPackedIdNoExhaustion tests interactions between Publish and the session ensuring that IDs are
 // released and reused
 func TestPackedIdNoExhaustion(t *testing.T) {
-	ts := basictestserver.New(&testLog{l: t, prefix: "TestServer:"})
+	ts := basictestserver.New(paholog.NewTestLogger(t, "TestServer:"))
 	ts.SetResponse(packets.PUBACK, &packets.Puback{
 		ReasonCode: packets.PubackSuccess,
 		Properties: &packets.Properties{},

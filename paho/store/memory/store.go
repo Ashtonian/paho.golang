@@ -58,14 +58,14 @@ func (m *Store) Put(packetID uint16, packetType byte, w io.WriterTo) error {
 	return nil
 }
 
-func (m *Store) Get(packetID uint16) (io.Reader, error) {
+func (m *Store) Get(packetID uint16) (io.ReadCloser, error) {
 	m.Lock()
 	defer m.Unlock()
 	d, ok := m.data[packetID]
 	if !ok {
 		return nil, ErrNotInStore
 	}
-	return bytes.NewReader(d.p), nil
+	return io.NopCloser(bytes.NewReader(d.p)), nil
 }
 
 // Delete removes the message with the specified store ID

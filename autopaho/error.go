@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/eclipse/paho.golang/paho/log"
 )
 
 // errorHandler provides the onClientError callback function that will be called by the Paho library. The sole aim
@@ -14,7 +15,7 @@ import (
 // userOnClientError will not be called (but there is a small chance that userOnClientError will be called followed
 // by userOnServerDisconnect (if we encounter an error sending but there is a DISCONNECT in the queue).
 type errorHandler struct {
-	debug paho.Logger
+	debug log.Logger
 
 	mu      sync.Mutex
 	errChan chan error // receives connection errors

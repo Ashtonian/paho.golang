@@ -1,4 +1,4 @@
-package session
+package state
 
 import (
 	"math"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/packets"
+	"github.com/eclipse/paho.golang/paho/session"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,13 +19,13 @@ func TestPacketIdAllocateAndFreeAll(t *testing.T) {
 	// Use full band
 	cpChan := make(chan packets.ControlPacket)
 	for i := uint16(1); i != 0; i++ {
-		v, _ := ss.allocateNextMid(packets.PUBLISH, cpChan)
+		v, _ := ss.allocateNextPacketId(packets.PUBLISH, cpChan)
 		assert.Equal(t, i, v)
 	}
 
 	// Trying to allocate another ID should fail
-	_, err := ss.allocateNextMid(packets.PUBLISH, cpChan)
-	assert.ErrorIs(t, err, ErrorPacketIdentifiersExhausted)
+	_, err := ss.allocateNextPacketId(packets.PUBLISH, cpChan)
+	assert.ErrorIs(t, err, session.ErrPacketIdentifiersExhausted)
 
 	// Free all Mids
 	allResponded := make(chan struct{})
@@ -58,7 +59,7 @@ func TestPacketIdAllocateAndFreeAll(t *testing.T) {
 
 	// Allocate all Mids again
 	for i := uint16(1); i != 0; i++ {
-		v, _ := ss.allocateNextMid(packets.PUBLISH, cpChan)
+		v, _ := ss.allocateNextPacketId(packets.PUBLISH, cpChan)
 		assert.Equal(t, i, v)
 	}
 
@@ -97,7 +98,7 @@ func TestPacketIdHoles(t *testing.T) {
 
 	// Allocate all Mids
 	for i := uint16(1); i != 0; i++ {
-		v, _ := ss.allocateNextMid(packets.PUBLISH, cpChan)
+		v, _ := ss.allocateNextPacketId(packets.PUBLISH, cpChan)
 		assert.Equal(t, i, v)
 	}
 
@@ -120,7 +121,7 @@ func TestPacketIdHoles(t *testing.T) {
 	}
 	t.Log("Num of holes:", len(h))
 	for i := 0; i < len(h); i++ {
-		_, err := ss.allocateNextMid(packets.PUBLISH, cpChan)
+		_, err := ss.allocateNextPacketId(packets.PUBLISH, cpChan)
 		assert.Nil(t, err)
 	}
 }

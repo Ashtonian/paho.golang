@@ -1,4 +1,4 @@
-package session
+package state
 
 import (
 	"context"
@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/packets"
-	"github.com/eclipse/paho.golang/paho/session/store/memory"
+	paholog "github.com/eclipse/paho.golang/paho/log"
+	"github.com/eclipse/paho.golang/paho/session"
+	"github.com/eclipse/paho.golang/paho/store/memory"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -52,25 +54,12 @@ import (
 //  a channel to the message ID so that we can notify our user when the transaction is complete (allowing a call to, for
 //  instance `Publish()` to block until the message is fully acknowledged even if we disconnect/reconnect in the interim.
 
-var (
-	ErrNoConnection                 = errors.New("no connection available")       // We are not in-between a call to ConAckReceived and ConnectionLost
-	ErrorPacketIdentifiersExhausted = errors.New("all packet identifiers in use") // // There are no available Packet IDs
-	// free message ids to be used.
-)
-
 const (
 	midMin uint16 = 1
 	midMax uint16 = 65535
 )
 
 type (
-	// Packet provides sufficient functionality to enable a packet to be transmitted with a packet identifier
-	Packet interface {
-		SetIdentifier(uint16) // Sets the packet identifier
-		Type() byte           // Gets the packet type
-		WriteTo(io.Writer) (int64, error)
-	}
-
 	// clientGenerated holds information on client-generated packets (e.g. an outgoing SUBSCRIBE request)
 	clientGenerated struct {
 		packetType byte // The type of the last packet sent (i.e. PUBLISH, SUBSCRIBE or UNSUBSCRIBE) - 0 means unknown until loaded from the store
@@ -90,7 +79,9 @@ type State struct {
 	connectionLostAt      time.Time  // Time that the connection was lost
 	sessionExpiryInterval uint32     // The session expiry interval sent with the most recent CONNECT packet
 
-	conn io.Writer // current connection or nil if we are not connected
+	conn          io.Writer       // current connection or nil if we are not connected
+	connCtx       context.Context // Context will be closed if the connection is lost (only valid when conn != nil)
+	connCtxCancel func()          // Cancels the above context
 
 	// client store - holds packets where the message ID was generated on the client (i.e. by paho.golang)
 	clientPackets map[uint16]clientGenerated // Store relating to messages sent TO the server
@@ -111,8 +102,8 @@ type State struct {
 	// probably be addressed at some point but should be fine in most circumstances).
 	inflight *semaphore.Weighted
 
-	debug  Logger
-	errors Logger
+	debug  paholog.Logger
+	errors paholog.Logger
 }
 
 // New creates a new state which will persist information using the passed in storer's.
@@ -122,8 +113,8 @@ func New(client storer, server storer) *State {
 		clientStore:   client,
 		serverPackets: make(map[uint16]byte),
 		serverStore:   server,
-		debug:         NOOPLogger{},
-		errors:        NOOPLogger{},
+		debug:         paholog.NOOPLogger{},
+		errors:        paholog.NOOPLogger{},
 	}
 }
 
@@ -134,8 +125,8 @@ func NewInMemory() *State {
 		clientStore:   memory.New(),
 		serverPackets: make(map[uint16]byte),
 		serverStore:   memory.New(),
-		debug:         NOOPLogger{},
-		errors:        NOOPLogger{},
+		debug:         paholog.NOOPLogger{},
+		errors:        paholog.NOOPLogger{},
 	}
 }
 
@@ -143,6 +134,7 @@ func NewInMemory() *State {
 func (s *State) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.connectionLost(nil) // Connection may be up in which case we need to cleanup.
 	for packetID, cg := range s.clientPackets {
 		cg.responseChan <- packets.ControlPacket{} // Default control packet indicates that we are shutting down (TODO: better solution?)
 		delete(s.clientPackets, packetID)
@@ -156,7 +148,7 @@ func (s *State) Close() error {
 // others (we should not begin sending/receiving packets until after the CONACK has been processed).
 // TODO: Add errors() function so we can notify the client of errors whilst transmitting the session stuff?
 // TODO: send any packets in the state that need to be retransmitted.
-func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.Connack) {
+func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.Connack) error {
 	// We could use cp.Properties.SessionExpiryInterval /  ca.Properties.SessionExpiryInterval to clear the session
 	// after the specified time period (if the Session Expiry Interval is absent the value in the CONNECT Packet used)
 	// however, this is not something the generic client can really accomplish (forks may wish to do this!).
@@ -167,6 +159,7 @@ func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.
 		_ = s.connectionLost(nil) // assume the connection dropped
 	}
 	s.conn = conn
+	s.connCtx, s.connCtxCancel = context.WithCancel(context.Background())
 
 	// If the Server accepts a connection with Clean Start set to 1, the Server MUST set Session Present to 0 in the
 	// CONNACK packet in addition to setting a 0x00 (Success) Reason Code in the CONNACK packet [MQTT-3.2.2-2].
@@ -191,7 +184,7 @@ func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.
 		s.sessionExpiryInterval = 0
 	}
 
-	// For now inflight is created when we first connect and is not updated on subsequent connections (this should
+	// For now, inflight is created when we first connect and is not updated on subsequent connections (this should
 	// probably be addressed at some point but should be fine in most circumstances because I believe it's unlikely to
 	// change).
 	if s.inflight == nil {
@@ -217,34 +210,43 @@ func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.
 		}
 	}
 
-	// Now we need to resend any packets in the store; we don't want this to block so do this in a goroutine
-	// which is passed the connection (meaning that if it drops the remaining sends will fail)
-	var toResend []uint16
-	for i := range s.clientPackets {
-		toResend = append(toResend, i)
+	// Now we need to resend any packets in the store; this must happen in order, the simplest approach is to complete
+	// the sending them before returning.
+	toResend, err := s.clientStore.List()
+	if err != nil {
+		return fmt.Errorf("failed to load stored message ids: %w", err)
 	}
-	go func(store storer, conn io.Writer, ids []uint16) {
-		for _, id := range ids {
-			r, err := s.clientStore.Get(id)
-			if err != nil {
-				s.errors.Printf("failed to load packet %d from store: %s", id, err)
-				continue
-			}
-			// TODO: Should probably notify client when error occurs happens so reconnect happens (but this should get
-			//  picked up by ping eventually so is OK for now).
-			p, err := packets.ReadPacket(r)
-			if err != nil {
-				s.errors.Printf("failed to read packet %d from store: %s", id, err)
-				continue
-			}
-			if p.Type == packets.PUBLISH {
-				p.Content.(*packets.Publish).Duplicate = true
-			}
-			if _, err = p.WriteTo(conn); err != nil {
-				s.errors.Printf("failed to send packet %d (from store) over network: %s", id, err)
-			}
+	s.debug.Printf("retransmitting %d messages", len(toResend))
+	for _, id := range toResend {
+		s.debug.Printf("resending message ID %d", id)
+		// The below could be optimised (there is no real need to load the full packet into memory; but it is simpler to do so)
+		r, err := s.clientStore.Get(id)
+		if err != nil {
+			s.errors.Printf("failed to load packet %d from store: %s", id, err)
+			continue
 		}
-	}(s.clientStore, conn, toResend)
+		// TODO: Should probably notify client when error occurs happens so reconnect happens (but this should get
+		//  picked up by ping eventually so is OK for now).
+		p, err := packets.ReadPacket(r)
+		_ = r.Close()
+		if err != nil {
+			s.errors.Printf("failed to read packet %d from store: %s", id, err)
+			continue
+		}
+		if p.Type == packets.PUBLISH {
+			p.Content.(*packets.Publish).Duplicate = true
+			s.debug.Printf("retransmitting Publish with identifier %d: %s", p.PacketID(), p)
+		} else {
+			s.debug.Printf("retransmitting message with identifier %d: %s", p.PacketID(), p)
+		}
+		_, err = p.WriteTo(conn)
+		if err != nil {
+			s.debug.Printf("retransmitting of identifier %d failed: %s", p.PacketID(), err)
+			return fmt.Errorf("failed to retransmit message: %w", err)
+		}
+		s.debug.Printf("retransmitted message with identifier %d", p.PacketID())
+	}
+	return nil
 }
 
 // ConnectionLost will be called when the connection is lost; either because we received a DISCONNECT packet or due
@@ -261,7 +263,8 @@ func (s *State) connectionLost(dp *packets.Disconnect) error {
 	if s.conn == nil {
 		return nil // ConnectionLost may be called multiple times (but call ref Disconnect packet should be first)
 	}
-	s.conn = nil
+	s.connCtxCancel()
+	s.conn, s.connCtx, s.connCtxCancel = nil, nil, nil
 	s.connectionLostAt = time.Now()
 
 	if dp != nil && dp.Properties != nil && dp.Properties.SessionExpiryInterval != nil {
@@ -276,42 +279,54 @@ func (s *State) connectionLost(dp *packets.Disconnect) error {
 	return nil
 }
 
-// StartTransaction begins a client-initiated transaction (i.e. sends a request to which a response is expected).
-// This function is responsible for assigning the Packet Identifier.
-// If a nil error is returned, we guarantee that one, and only one, message will be sent to resp (assuming `Close()`
-// is called).
-func (s *State) StartTransaction(ctx context.Context, packet Packet, resp chan<- packets.ControlPacket) error {
-	if packet.Type() == packets.PUBLISH { // PUBLISH packets need to adhere to RECEIVE MAXIMUM in CONACK
-		s.mu.Lock() // There may be a delay waiting for semaphore so check for connection before and after
-		if s.conn == nil {
-			s.mu.Unlock()
-			return ErrNoConnection
-		}
+// AddToSession adds a packet to the session state (including allocation of a Message Identifier).
+// If this function returns a nil then:
+//   - A slot has been allocated (function will block ir RECEIVE MAXIMUM messages are inflight)
+//   - A message Identifier has been added to the passed in packet
+//   - Publish messages will have been written to the store (and will be automatically transmitted if a new connection
+//     is established before the message is fully acknowledged - subject to state rules in the MQTTv5 spec)
+//   - Something will be sent to `resp` when either the message is fully acknowledged or the packet is removed from
+//     the session (in which case nil will be sent).
+//
+// If the function returns an error, then any actions taken will be rewound prior to return.
+func (s *State) AddToSession(ctx context.Context, packet session.Packet, resp chan<- packets.ControlPacket) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.mu.Lock() // There may be a delay waiting for semaphore so check for connection before and after
+	if s.conn == nil {
 		s.mu.Unlock()
+		return session.ErrNoConnection
+	}
+	// If the connection is lost whilst we are waiting, then in Acquire should terminate.
+	stopAf := context.AfterFunc(s.connCtx, func() { cancel() })
+	defer stopAf()
+	s.mu.Unlock()
 
-		// Ensure only "RECEIVE MAXIMUM" messages are in flight at any time
-		if err := s.inflight.Acquire(ctx, 1); err != nil {
+	// Ensure only "RECEIVE MAXIMUM" messages are in flight at any time
+	if err := s.inflight.Acquire(ctx, 1); err != nil {
+		if s.connCtx.Err() != nil {
+			return session.ErrNoConnection
+		}
+		return err // Allow user to confirm if it was their context that led to termination
+	}
+
+	// We have a slot, so acquire a Message ID (this should only fail if there is a bug because the maximum receive max
+	// is 65535, which matches the number of slots).
+	packetID, err := s.allocateNextPacketId(packet.Type(), resp)
+	if err != nil {
+		s.inflight.Release(1) // Free slot allocated above
+		return err
+	}
+	packet.SetIdentifier(packetID)
+	if packet.Type() == packets.PUBLISH {
+		if err = s.clientStore.Put(packetID, packet.Type(), packet); err != nil {
+			s.mu.Lock()
+			delete(s.clientPackets, packetID)
+			s.mu.Unlock()
+			s.inflight.Release(1)   // Free slot allocated above
+			packet.SetIdentifier(0) // ensure the Message identifier is not used
 			return err
 		}
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.conn == nil {
-		return ErrNoConnection
-	}
-	mid, err := s.allocateNextMid(packet.Type(), resp)
-	if err != nil {
-		return err
-	}
-	packet.SetIdentifier(mid)
-	if packet.Type() == packets.PUBLISH {
-		s.clientStore.Put(mid, packet.Type(), packet)
-	}
-	if _, err := packet.WriteTo(s.conn); err != nil {
-		// Should we clear error in this case? Probably not as it should be in store
-		return err
 	}
 	return nil
 }
@@ -526,9 +541,12 @@ func (s *State) PacketReceived(recv *packets.ControlPacket, pubChan chan<- *pack
 	}
 }
 
-// allocateNextMid assigns the next available MID
-// Callers must hold lock on s.mu
-func (s *State) allocateNextMid(forPacketType byte, resp chan<- packets.ControlPacket) (uint16, error) {
+// allocateNextPacketId assigns the next available packet ID
+// Callers must NOT hold lock on s.mu
+func (s *State) allocateNextPacketId(forPacketType byte, resp chan<- packets.ControlPacket) (uint16, error) {
+	s.mu.Lock() // There may be a delay waiting for semaphore so check for connection before and after
+	defer s.mu.Unlock()
+
 	cg := clientGenerated{
 		packetType:   forPacketType,
 		responseChan: resp,
@@ -547,7 +565,7 @@ func (s *State) allocateNextMid(forPacketType byte, resp chan<- packets.ControlP
 	// Default struct will set s.lastMid=0 meaning we have already scanned all mids
 	if s.lastMid == 0 {
 		s.lastMid = 1
-		return 0, ErrorPacketIdentifiersExhausted
+		return 0, session.ErrPacketIdentifiersExhausted
 	}
 
 	// Scan from start of range to lastMid (use +1 to avoid rolling over when s.lastMid = 65535)
@@ -559,7 +577,7 @@ func (s *State) allocateNextMid(forPacketType byte, resp chan<- packets.ControlP
 		s.lastMid = i + 1
 		return i + 1, nil
 	}
-	return 0, ErrorPacketIdentifiersExhausted
+	return 0, session.ErrPacketIdentifiersExhausted
 }
 
 // clean deletes any existing stored session information
@@ -570,6 +588,9 @@ func (s *State) clean() {
 
 	for _, p := range s.clientPackets {
 		p.responseChan <- packets.ControlPacket{}
+		if p.packetType == packets.PUBLISH {
+			s.inflight.Release(1) // Cleaned publish packets are no longer in flight
+		}
 	}
 	s.clientPackets = make(map[uint16]clientGenerated)
 
@@ -612,13 +633,13 @@ func (s *State) tidy(trigger *packets.ControlPacket) {
 
 // SetDebugLogger takes an instance of the paho Logger interface
 // and sets it to be used by the debug log endpoint
-func (s *State) SetDebugLogger(l Logger) {
+func (s *State) SetDebugLogger(l paholog.Logger) {
 	s.debug = l
 }
 
 // SetErrorLogger takes an instance of the paho Logger interface
 // and sets it to be used by the error log endpoint
-func (s *State) SetErrorLogger(l Logger) {
+func (s *State) SetErrorLogger(l paholog.Logger) {
 	s.errors = l
 }
 

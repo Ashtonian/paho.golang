@@ -13,8 +13,7 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
-	"github.com/eclipse/paho.golang/paho/session"
-	"github.com/eclipse/paho.golang/paho/session/store/memory"
+	"github.com/eclipse/paho.golang/paho/store/memory"
 )
 
 func main() {
@@ -28,7 +27,7 @@ func main() {
 	// for debug purposes).
 	clientStore := memory.New()
 	serverStore := memory.New()
-	sess := session.New(clientStore, serverStore)
+	sess := state.New(clientStore, serverStore)
 	defer sess.Close()
 	if cfg.debug {
 		sess.SetErrorLogger(logger{prefix: "autoPaho sess"})

@@ -6,7 +6,14 @@ This repository contains the source code for the [Eclipse Paho](http://eclipse.o
 ----------------------------------------------------------------------------------------
 Notes on changes from paho.golang@master
 
-This *TEST* repo implements persistent session state support 
+This *TEST* repo implements persistent session state support.
+
+It's currently alpha code (which I'm actively testing), but I believe it shows one way `paho.golang` can implement 
+persistent session states in a way that mostly maintains compatability with, and the simplicity of, the current client
+whilst maximising flexibility (and allowing me to implement the functionality I personally need!)
+
+This code will contain bugs (but it also fixes a number of bugs in the current code!), and there is plenty of room for 
+improvements/optimisation. 
 
 ## Notes on implementation
 
@@ -16,8 +23,10 @@ which is passed to `paho` via `ClientConfig`. This means that a `sessionState` c
 instance of `paho.Client`) which enables a call to `Publish` made with one instance to block until released within 
 another instance (allowing `autopaho` to effectively hide reconnections).
 
-The main test for the changes was using it within `autopaho`; it it's usable within that library then its probably
-usable elsewhere.
+The main test for the changes was using it within `autopaho`; if it's usable within that library then its probably
+usable elsewhere. `autopaho` now implements `PublishViaQueue` which aims to attempt to publish the message whatever 
+the connection state (never connected, currently connected, attempting to reconnect) and stores outgoing messages in
+a queue (meaning messages get moved from a queue to the session state, but I think that's unavoidable).,
 
 * `paho` closes the session state if it creates it. This means that most applications will run without modification 
 because any calls blocking when `Client.stop` is closed will be released (and return the expected error).
@@ -27,22 +36,8 @@ is in progress.
 
 ## TODO
 
-// Load the session state from storage (currently only memory persistence is supported)
 // Improve error handling (difficult to know what to do when the store fails - not one "best" answer)
-// Add a lot more tests
-
-### Ability to queue messages before an ID is allocated  (New requirement for consideration)
-
-A common use case keep publishing messages with the expectation that the library to ensure they get sent. This is 
-something I'm keen to support in `autopaho` (and regardless, something that it must be possible to accomplish).
-
-To support this we would want to queue messages when:
-    * The connection is down (can be easily added to autopaho)
-    * Receive Maximum limit has been hit, so we cannot currently send another message
-
-The second point is currently a problem. Ideally we would not want to pass these messages to `paho` until it's ready for
-them because it should be possible for them to be stored to disk (the link may go down for a significant period so the
-queued messages may be of a considerable size).
+// Add more tests
 
 ## Issues
 
@@ -69,7 +64,7 @@ This gets a bit tricky with a session because there are messages inflight before
 semaphore has been moved into `sessionState`. Currently, the Receive Maximum from the first CONNACK is used regardless 
 of any potential changes in future connections (it seems fairly unlikely that the value will change but its possible).
 This is fixable but will need to be carefully managed to avoid races so is being left for now (there were issues with the
-way this was handled previously too, so I don;t see it as a big issue).
+way this was handled previously too, so I don't see it as a big issue).
 
 ## Breaking changes:
 
@@ -79,12 +74,10 @@ no one has done so.
 regardless of whether the message had been sent (potentially leading to reuse). This has been changed such that 
 once transmitted, the message will be acknowledged regardless of the publish context (but the Publish function will
 only block until the context expires). The Errors returned now better indicate what occurred. 
-**TODO:** this!
-* `autopaho` CleanSession flag.  
-Previously the CleanSession was hardcoded to `true`; this is no longer the case and the default is `false`. Whilst
-this is potentially a breaking change `SessionExpiryInterval` will default to 0 meaning the session will be removed
-when the connection drops. As a result this change should have no impact on most users; it may be a problem if
-another application has connected with `SessionExpiryInterval>0` meaning a session exists.
+* `autopaho` CleanSession flag. Previously the CleanSession was hardcoded to `true`; this is no longer the case and 
+the default is `false`. Whilstt his is potentially a breaking change `SessionExpiryInterval` will default to 0 meaning 
+the session will be removed when the connection drops. As a result this change should have no impact on most users; it 
+may be a problem if another application has connected with `SessionExpiryInterval>0` meaning a session exists.
 
 ## General
 

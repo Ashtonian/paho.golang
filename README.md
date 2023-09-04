@@ -36,8 +36,12 @@ is in progress.
 
 ## TODO
 
+// Load data from session store at startup
+// Disk-based store and queue
+// Review changes and tidy up code/comments
 // Improve error handling (difficult to know what to do when the store fails - not one "best" answer)
 // Add more tests
+// Add more comments
 
 ## Issues
 

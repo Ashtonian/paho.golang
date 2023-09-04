@@ -15,6 +15,7 @@ import (
 // sent to the response channel
 func TestPacketIdAllocateAndFreeAll(t *testing.T) {
 	ss := NewInMemory()
+	ss.clientPackets = make(map[uint16]clientGenerated)
 
 	// Use full band
 	cpChan := make(chan packets.ControlPacket)
@@ -87,6 +88,7 @@ func TestPacketIdAllocateAndFreeAll(t *testing.T) {
 // TestPacketIdHoles confirms that random "holes" within the packet ID map will be found and utilised
 func TestPacketIdHoles(t *testing.T) {
 	ss := NewInMemory()
+	ss.clientPackets = make(map[uint16]clientGenerated)
 
 	// For this test we ignore responses
 	cpChan := make(chan packets.ControlPacket)

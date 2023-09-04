@@ -1,6 +1,7 @@
 package testserver
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -155,8 +156,14 @@ func (i *Instance) Connect(ctx context.Context) (net.Conn, chan struct{}, error)
 	userCon = packets.NewThreadSafeConn(userCon)
 	ourCon = packets.NewThreadSafeConn(ourCon) // Should not be necessary but may avoid hard to spot bugs
 
+	done := make(chan struct{})
 	go func() {
-		<-ctx.Done() // Ensure that we exit cleanly if context closed
+		select {
+		case <-done:
+			return // shutdown via another mechanism
+		case <-ctx.Done(): // Ensure that we exit cleanly if context closed
+		}
+
 		if err := ourCon.Close(); err != nil {
 			i.logger.Printf("error closing ourConn: %s", err)
 		}
@@ -172,7 +179,6 @@ func (i *Instance) Connect(ctx context.Context) (net.Conn, chan struct{}, error)
 		close(outGoingPackets)
 	}()
 
-	done := make(chan struct{})
 	go func() {
 		i.handleOutgoing(outGoingPackets, ourCon) // will return after outGoingPackets closed
 		if err := ourCon.Close(); err != nil {    // Ensure the other end receives notification of the closure
@@ -192,9 +198,12 @@ func (i *Instance) handleIncoming(conn io.Reader, out chan<- *packets.ControlPac
 	for {
 		p, err := packets.ReadPacket(conn)
 		if err != nil {
-			var remaining bytes.Buffer // Get anything else we have received in case that helps identify the issue
-			_, _ = remaining.ReadFrom(conn)
-			return fmt.Errorf("handleIncoming:ReadPacket: %w Remaining data: %v", err, remaining.Bytes())
+			r := bufio.NewReader(conn)
+			time.Sleep(time.Millisecond) // Wait a millisecond for other data to come in (helps with debugging)
+			buffSize := r.Buffered()
+			remaining := make([]byte, buffSize)
+			_, _ = r.Read(remaining)
+			return fmt.Errorf("handleIncoming:ReadPacket: %w Remaining data: %v", err, remaining)
 		}
 		if err = i.processIncoming(p, out); err != nil {
 			return fmt.Errorf("handleIncoming:processIncoming: %w", err)

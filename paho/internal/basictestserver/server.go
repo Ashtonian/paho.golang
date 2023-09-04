@@ -18,6 +18,7 @@ type TestServer struct {
 	conn       net.Conn
 	clientConn net.Conn
 	stop       chan struct{}
+	done       chan struct{}
 	responses  map[byte]packets.Packet
 
 	receivedMu      sync.Mutex
@@ -30,6 +31,7 @@ type TestServer struct {
 func New(logger Logger) *TestServer {
 	t := &TestServer{
 		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
 		responses: make(map[byte]packets.Packet),
 		logger:    logger,
 	}
@@ -57,9 +59,11 @@ func (t *TestServer) SendPacket(p packets.Packet) error {
 func (t *TestServer) Stop() {
 	t.conn.Close()
 	close(t.stop)
+	<-t.done
 }
 
 func (t *TestServer) Run() {
+	defer close(t.done)
 	for {
 		select {
 		case <-t.stop:

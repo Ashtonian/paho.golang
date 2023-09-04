@@ -89,6 +89,7 @@ type (
 		// raCtx is used for handling the MQTTv5 authentication exchange.
 		raCtx          *CPContext
 		stop           chan struct{}
+		done           chan struct{} // closed when shutdown complete (only valid after Connect returns nil error)
 		publishPackets chan *packets.Publish
 		acksTracker    acksTracker
 		workers        sync.WaitGroup
@@ -144,6 +145,7 @@ func NewClient(conf ClientConfig) *Client {
 			TopicAliasMaximum: 0,
 		},
 		ClientConfig: conf,
+		done:         make(chan struct{}),
 		errors:       log.NOOPLogger{},
 		debug:        log.NOOPLogger{},
 	}
@@ -186,11 +188,13 @@ func (c *Client) Connect(ctx context.Context, cp *Connect) (*Connack, error) {
 		close(c.stop)
 		close(c.publishPackets)
 		_ = c.Conn.Close()
+		close(c.done)
 		c.mu.Unlock()
 	}
 
 	c.mu.Lock()
 	c.stop = make(chan struct{})
+	c.done = make(chan struct{})
 
 	var publishPacketsSize uint16 = math.MaxUint16
 	if cp.Properties != nil && cp.Properties.ReceiveMaximum != nil {
@@ -356,6 +360,12 @@ func (c *Client) Connect(ctx context.Context, cp *Connect) (*Connack, error) {
 	return ca, nil
 }
 
+// Done returns a channel that will be closed when Client has shutdown. Only valid after Connect has returned a
+// nil error.
+func (c *Client) Done() <-chan struct{} {
+	return c.done
+}
+
 // Ack transmits an acknowledgement of the `Publish` packet.
 // WARNING: Calling Ack after the connection is closed may have unpredictable results (particularly if the sessionState
 // is being accessed by a new connection). See issue #160.
@@ -481,7 +491,8 @@ func (c *Client) close() {
 
 	select {
 	case <-c.stop:
-		// already shutting down, do nothing
+		// already shutting down, return when shutdown complete
+		<-c.done
 		return
 	default:
 	}
@@ -502,6 +513,10 @@ func (c *Client) close() {
 		}
 	}
 	c.debug.Println("session updated")
+	c.debug.Println("waiting on workers")
+	c.workers.Wait()
+	c.debug.Println("workers done")
+	close(c.done)
 }
 
 // error is called to signify that an error situation has occurred, this
@@ -511,15 +526,11 @@ func (c *Client) close() {
 func (c *Client) error(e error) {
 	c.debug.Println("error called:", e)
 	c.close()
-	c.debug.Println("waiting on workers")
-	c.workers.Wait()
-	c.debug.Println("workers done")
 	go c.OnClientError(e)
 }
 
 func (c *Client) serverDisconnect(d *Disconnect) {
 	c.close()
-	c.workers.Wait()
 	c.debug.Println("calling OnServerDisconnect")
 	go c.OnServerDisconnect(d)
 }
@@ -899,7 +910,6 @@ func (c *Client) Disconnect(d *Disconnect) error {
 	_, err := d.Packet().WriteTo(c.Conn)
 
 	c.close()
-	c.workers.Wait()
 
 	return err
 }

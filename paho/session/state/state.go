@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -109,24 +110,20 @@ type State struct {
 // New creates a new state which will persist information using the passed in storer's.
 func New(client storer, server storer) *State {
 	return &State{
-		clientPackets: make(map[uint16]clientGenerated),
-		clientStore:   client,
-		serverPackets: make(map[uint16]byte),
-		serverStore:   server,
-		debug:         paholog.NOOPLogger{},
-		errors:        paholog.NOOPLogger{},
+		clientStore: client,
+		serverStore: server,
+		debug:       paholog.NOOPLogger{},
+		errors:      paholog.NOOPLogger{},
 	}
 }
 
 // NewInMemory returns a default State that stores all information in memory
 func NewInMemory() *State {
 	return &State{
-		clientPackets: make(map[uint16]clientGenerated),
-		clientStore:   memory.New(),
-		serverPackets: make(map[uint16]byte),
-		serverStore:   memory.New(),
-		debug:         paholog.NOOPLogger{},
-		errors:        paholog.NOOPLogger{},
+		clientStore: memory.New(),
+		serverStore: memory.New(),
+		debug:       paholog.NOOPLogger{},
+		errors:      paholog.NOOPLogger{},
 	}
 }
 
@@ -187,26 +184,10 @@ func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.
 	// For now, inflight is created when we first connect and is not updated on subsequent connections (this should
 	// probably be addressed at some point but should be fine in most circumstances because I believe it's unlikely to
 	// change).
+	// We also use this as a trigger to load the session state
 	if s.inflight == nil {
-		recvMax := uint16(65535) // Default as per MQTT spec
-		if ca.Properties != nil && ca.Properties.ReceiveMaximum != nil {
-			recvMax = *ca.Properties.ReceiveMaximum
-		}
-
-		// Not sure how to deal with the situation where there are more inflight messages in the session than the
-		// broker permits - suspect this will probably never happen, but it cannot be ruled out
-		if inFlight > recvMax {
-			s.errors.Printf("RecieveMaximum from broker (%d) is less than the messages currently in flight (%d)", recvMax, inFlight)
-			recvMax = inFlight
-		}
-		s.inflight = semaphore.NewWeighted(int64(recvMax))
-
-		if inFlight > 0 {
-			s.debug.Printf("acquiring semaphore with %d weight", inFlight)
-			if err := s.inflight.Acquire(context.Background(), int64(inFlight)); err != nil { // should never block or error
-				s.errors.Println("Failed to acquire semaphore whilst handling CONACK", err)
-			}
-			s.debug.Printf("acquired semaphore with %d weight", inFlight)
+		if err := s.initSession(ca); err != nil {
+			return fmt.Errorf("failed to initialise session: %w", err)
 		}
 	}
 
@@ -219,32 +200,118 @@ func (s *State) ConAckReceived(conn io.Writer, cp *packets.Connect, ca *packets.
 	s.debug.Printf("retransmitting %d messages", len(toResend))
 	for _, id := range toResend {
 		s.debug.Printf("resending message ID %d", id)
-		// The below could be optimised (there is no real need to load the full packet into memory; but it is simpler to do so)
 		r, err := s.clientStore.Get(id)
 		if err != nil {
 			s.errors.Printf("failed to load packet %d from store: %s", id, err)
 			continue
 		}
-		// TODO: Should probably notify client when error occurs happens so reconnect happens (but this should get
-		//  picked up by ping eventually so is OK for now).
-		p, err := packets.ReadPacket(r)
+		// DUP needs to be set if resending a PUBLISH (but there is no real need to fully parse the message, so we don't)
+		// pkt, err := io.ReadAll(r)
+		// if err != nil {
+		// 	_ = r.Close()
+		// 	return fmt.Errorf("failed to retrieve packet %d from client store: %w", id, err)
+		// }
+		// if len(pkt) < 2 {
+		// 	_ = r.Close()
+		// 	return fmt.Errorf("packet %d from client store is too short", id)
+		// }
+		// packetType := pkt[0] >> 4
+		// switch packetType {
+		// case packets.PUBLISH:
+		// 	pkt[0] |= 1 << 3 // Set the DUP flag
+		// default:
+		// 	return fmt.Errorf("unexpected packet type %d (for packet identifier %d) in server store", packetType, id)
+		// }
+		// _, err = conn.Write(pkt)
+		// The below should be a bit more efficient as it avoids the need to read the full packet into memory
+		fixedHeader := make([]byte, 2)
+		_, err = io.ReadFull(r, fixedHeader)
+		if err != nil {
+			_ = r.Close()
+			return fmt.Errorf("failed to retrieve packet %d from client store: %w", id, err)
+		}
+		packetType := fixedHeader[0] >> 4
+		switch packetType {
+		case packets.PUBLISH:
+			fixedHeader[0] |= 1 << 3 // Set the DUP flag
+		default:
+			return fmt.Errorf("unexpected packet type %d (for packet identifier %d) in server store", packetType, id)
+		}
+		_, err = io.Copy(conn, io.MultiReader(bytes.NewReader(fixedHeader), r))
 		_ = r.Close()
 		if err != nil {
-			s.errors.Printf("failed to read packet %d from store: %s", id, err)
+			s.debug.Printf("retransmitting of identifier %d failed: %s", id, err)
+			return fmt.Errorf("failed to retransmit message (%d): %w", id, err)
+		}
+		s.debug.Printf("retransmitted message with identifier %d", id)
+		// On initial connection, the packet needs to be added to our record of client generated packets.
+		if _, ok := s.clientPackets[id]; !ok {
+			s.clientPackets[id] = clientGenerated{
+				packetType:   packetType,
+				responseChan: make(chan packets.ControlPacket, 1), // Nothing will wait on this
+			}
+		}
+	}
+	return nil
+}
+
+// initSession should be called once, when the first connection is established.
+// It configures data structures and loads information from the store as needed.
+// The caller must hold a lock on s.mu
+func (s *State) initSession(ca *packets.Connack) error {
+	s.clientPackets = make(map[uint16]clientGenerated) // This will be populated whilst packets are resent
+
+	s.serverPackets = make(map[uint16]byte)
+	ids, err := s.serverStore.List()
+	if err != nil {
+		return fmt.Errorf("failed to load stored server message ids: %w", err)
+	}
+	for _, id := range ids {
+		r, err := s.serverStore.Get(id)
+		if err != nil {
+			s.errors.Printf("failed to load packet %d from store: %s", id, err)
 			continue
 		}
-		if p.Type == packets.PUBLISH {
-			p.Content.(*packets.Publish).Duplicate = true
-			s.debug.Printf("retransmitting Publish with identifier %d: %s", p.PacketID(), p)
-		} else {
-			s.debug.Printf("retransmitting message with identifier %d: %s", p.PacketID(), p)
-		}
-		_, err = p.WriteTo(conn)
+		// We only need to know the packet type so there is no need to process the entire packet
+		byte1 := make([]byte, 1)
+		_, err = r.Read(byte1)
+		_ = r.Close()
 		if err != nil {
-			s.debug.Printf("retransmitting of identifier %d failed: %s", p.PacketID(), err)
-			return fmt.Errorf("failed to retransmit message: %w", err)
+			return fmt.Errorf("failed to retrieve packet %d from server store: %w", id, err)
 		}
-		s.debug.Printf("retransmitted message with identifier %d", p.PacketID())
+		packetType := byte1[0] >> 4
+		switch packetType {
+		case packets.PUBLISH:
+			s.serverPackets[id] = packets.PUBLISH
+		case packets.PUBREC:
+			s.serverPackets[id] = packets.PUBREC
+		default:
+			return fmt.Errorf("unexpected packet type %d (for packet identifier %d) in server store", packetType, id)
+		}
+	}
+	ids, err = s.serverStore.List()
+
+	// Configure the semaphore that limits messages in flight
+	recvMax := uint16(65535) // Default as per MQTT spec
+	if ca.Properties != nil && ca.Properties.ReceiveMaximum != nil {
+		recvMax = *ca.Properties.ReceiveMaximum
+	}
+
+	// Not sure how to deal with the situation where there are more inflight messages in the session than the
+	// broker permits - suspect this will probably never happen, but it cannot be ruled out
+	inFlight := uint16(len(s.clientPackets))
+	if inFlight > recvMax {
+		s.errors.Printf("RecieveMaximum from broker (%d) is less than the messages currently in flight (%d)", recvMax, inFlight)
+		recvMax = inFlight
+	}
+	s.inflight = semaphore.NewWeighted(int64(recvMax))
+
+	if inFlight > 0 {
+		s.debug.Printf("acquiring semaphore with %d weight", inFlight)
+		if err := s.inflight.Acquire(context.Background(), int64(inFlight)); err != nil { // should never block or error
+			s.errors.Println("Failed to acquire semaphore whilst handling CONACK", err)
+		}
+		s.debug.Printf("acquired semaphore with %d weight", inFlight)
 	}
 	return nil
 }

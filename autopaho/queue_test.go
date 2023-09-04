@@ -28,12 +28,6 @@ func TestQueuedMessages(t *testing.T) {
 	broker, _ := url.Parse(dummyURL)
 	serverLogger := paholog.NewTestLogger(t, "testServer:")
 	logger := paholog.NewTestLogger(t, "test:")
-	defer func() {
-		// Prevent any logging after completion. Unfortunately, there is currently no way to know if paho.Client
-		// has fully shutdown. As such, messages may be logged after shutdown (which will result in a panic).
-		serverLogger.Stop()
-		logger.Stop()
-	}()
 
 	ts := testserver.New(serverLogger)
 	got200Messages := make(chan struct{}) // Closed when 200 messages received
@@ -83,8 +77,8 @@ func TestQueuedMessages(t *testing.T) {
 	config := ClientConfig{
 		BrokerUrls:        []*url.URL{broker},
 		KeepAlive:         60,
-		ConnectRetryDelay: time.Millisecond, // Retry connection very quickly!
-		ConnectTimeout:    shortDelay,       // Connection should come up very quickly
+		ConnectRetryDelay: 500 * time.Millisecond, // Retry connection very quickly!
+		ConnectTimeout:    shortDelay,             // Connection should come up very quickly
 		AttemptConnection: func(ctx context.Context, _ ClientConfig, _ *url.URL) (net.Conn, error) {
 			if !allowConnection.Load() {
 				return nil, fmt.Errorf("some random error")
@@ -201,9 +195,4 @@ func TestQueuedMessages(t *testing.T) {
 			t.Errorf("expected %s, got %s", exp, receivedPublish[i-1])
 		}
 	}
-
-	// Prevent any future logging - unfortunately, there is currently no way to know if paho.Client has completely
-	// shutdown, as such, messages may be logged after shutdown (which will result in a panic).
-	serverLogger.Stop()
-	logger.Stop()
 }

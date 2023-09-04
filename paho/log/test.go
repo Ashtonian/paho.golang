@@ -50,8 +50,8 @@ func (t *TestLog) Printf(format string, v ...interface{}) {
 }
 
 // Stop prevents future logging
-func (t *TestLog) Stop() {
-	t.Lock()
-	defer t.Unlock()
-	t.l = nil
-}
+// func (t *TestLog) Stop() {
+// 	t.Lock()
+// 	defer t.Unlock()
+// 	t.l = nil
+// }

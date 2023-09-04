@@ -58,12 +58,15 @@ func TestClientConnect(t *testing.T) {
 		},
 	})
 	go ts.Run()
-	defer ts.Stop()
+	defer func() {
+		ts.Stop()
+	}()
 
 	c := NewClient(ClientConfig{
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	cp := &Connect{
@@ -85,8 +88,6 @@ func TestClientConnect(t *testing.T) {
 	ca, err := c.Connect(context.Background(), cp)
 	require.Nil(t, err)
 	assert.Equal(t, uint8(0), ca.ReasonCode)
-
-	time.Sleep(10 * time.Millisecond)
 }
 
 func TestClientSubscribe(t *testing.T) {
@@ -103,12 +104,20 @@ func TestClientSubscribe(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
-	go c.incoming()
-	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.workers.Add(2)
+	go func() {
+		defer c.workers.Done()
+		c.incoming()
+	}()
+	go func() {
+		defer c.workers.Done()
+		c.PingHandler.Start(c.Conn, 30*time.Second)
+	}()
 	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	s := &Subscribe{
@@ -140,12 +149,20 @@ func TestClientUnsubscribe(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
-	go c.incoming()
-	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.workers.Add(2)
+	go func() {
+		defer c.workers.Done()
+		c.incoming()
+	}()
+	go func() {
+		defer c.workers.Done()
+		c.PingHandler.Start(c.Conn, 30*time.Second)
+	}()
 	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	u := &Unsubscribe{
@@ -158,8 +175,6 @@ func TestClientUnsubscribe(t *testing.T) {
 	ua, err := c.Unsubscribe(context.Background(), u)
 	require.Nil(t, err)
 	assert.Equal(t, []byte{0, 17}, ua.Reasons)
-
-	time.Sleep(10 * time.Millisecond)
 }
 
 func TestClientPublishQoS0(t *testing.T) {
@@ -172,12 +187,20 @@ func TestClientPublishQoS0(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
-	go c.incoming()
-	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.workers.Add(2)
+	go func() {
+		defer c.workers.Done()
+		c.incoming()
+	}()
+	go func() {
+		defer c.workers.Done()
+		c.PingHandler.Start(c.Conn, 30*time.Second)
+	}()
 	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	p := &Publish{
@@ -206,12 +229,20 @@ func TestClientPublishQoS1(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
-	go c.incoming()
-	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.workers.Add(2)
+	go func() {
+		defer c.workers.Done()
+		c.incoming()
+	}()
+	go func() {
+		defer c.workers.Done()
+		c.PingHandler.Start(c.Conn, 30*time.Second)
+	}()
 	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	p := &Publish{
@@ -223,8 +254,6 @@ func TestClientPublishQoS1(t *testing.T) {
 	pa, err := c.Publish(context.Background(), p)
 	require.Nil(t, err)
 	assert.Equal(t, uint8(0), pa.ReasonCode)
-
-	time.Sleep(10 * time.Millisecond)
 }
 
 func TestClientPublishQoS2(t *testing.T) {
@@ -245,12 +274,20 @@ func TestClientPublishQoS2(t *testing.T) {
 		Conn: ts.ClientConn(),
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
-	go c.incoming()
-	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.workers.Add(2)
+	go func() {
+		defer c.workers.Done()
+		c.incoming()
+	}()
+	go func() {
+		defer c.workers.Done()
+		c.PingHandler.Start(c.Conn, 30*time.Second)
+	}()
 	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	p := &Publish{
@@ -262,8 +299,6 @@ func TestClientPublishQoS2(t *testing.T) {
 	pr, err := c.Publish(context.Background(), p)
 	require.Nil(t, err)
 	assert.Equal(t, uint8(0), pr.ReasonCode)
-
-	time.Sleep(10 * time.Millisecond)
 }
 
 func TestClientReceiveQoS0(t *testing.T) {
@@ -284,12 +319,20 @@ func TestClientReceiveQoS0(t *testing.T) {
 		}),
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
-	go c.incoming()
-	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.workers.Add(2)
+	go func() {
+		defer c.workers.Done()
+		c.incoming()
+	}()
+	go func() {
+		defer c.workers.Done()
+		c.PingHandler.Start(c.Conn, 30*time.Second)
+	}()
 	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 	go c.routePublishPackets()
 
@@ -321,12 +364,20 @@ func TestClientReceiveQoS1(t *testing.T) {
 		}),
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
-	go c.incoming()
-	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.workers.Add(2)
+	go func() {
+		defer c.workers.Done()
+		c.incoming()
+	}()
+	go func() {
+		defer c.workers.Done()
+		c.PingHandler.Start(c.Conn, 30*time.Second)
+	}()
 	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 	go c.routePublishPackets()
 
@@ -359,12 +410,20 @@ func TestClientReceiveQoS2(t *testing.T) {
 		}),
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
-	go c.incoming()
-	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.workers.Add(2)
+	go func() {
+		defer c.workers.Done()
+		c.incoming()
+	}()
+	go func() {
+		defer c.workers.Done()
+		c.PingHandler.Start(c.Conn, 30*time.Second)
+	}()
 	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 	go c.routePublishPackets()
 
@@ -411,8 +470,8 @@ func TestClientReceiveAndAckInOrder(t *testing.T) {
 		}),
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
-	t.Cleanup(c.close)
 
 	ctx := context.Background()
 	ca, err := c.Connect(ctx, &Connect{
@@ -492,8 +551,8 @@ func TestManualAcksInOrder(t *testing.T) {
 		require.NoError(t, c.Ack(p))
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
-	t.Cleanup(c.close)
 
 	ctx := context.Background()
 	ca, err := c.Connect(ctx, &Connect{
@@ -563,12 +622,20 @@ func TestReceiveServerDisconnect(t *testing.T) {
 		},
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
-	go c.incoming()
-	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.workers.Add(2)
+	go func() {
+		defer c.workers.Done()
+		c.incoming()
+	}()
+	go func() {
+		defer c.workers.Done()
+		c.PingHandler.Start(c.Conn, 30*time.Second)
+	}()
 	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	err := ts.SendPacket(&packets.Disconnect{
@@ -596,12 +663,20 @@ func TestAuthenticate(t *testing.T) {
 		AuthHandler: &fakeAuth{},
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	c.stop = make(chan struct{})
 	c.publishPackets = make(chan *packets.Publish)
-	go c.incoming()
-	go c.PingHandler.Start(c.Conn, 30*time.Second)
+	c.workers.Add(2)
+	go func() {
+		defer c.workers.Done()
+		c.incoming()
+	}()
+	go func() {
+		defer c.workers.Done()
+		c.PingHandler.Start(c.Conn, 30*time.Second)
+	}()
 	c.Session.ConAckReceived(c.Conn, &packets.Connect{}, &packets.Connack{})
 
 	ctx, cf := context.WithTimeout(context.Background(), 5*time.Second)
@@ -687,6 +762,7 @@ func TestAuthenticateOnConnect(t *testing.T) {
 		AuthHandler: &auther,
 	})
 	require.NotNil(t, c)
+	defer c.close()
 	c.SetDebugLogger(clientLogger)
 
 	cp := &Connect{
@@ -782,7 +858,7 @@ func TestDisconnect(t *testing.T) {
 	})
 	require.NotNil(t, c)
 	c.SetDebugLogger(clientLogger)
-	t.Cleanup(c.close)
+	defer c.close()
 
 	ctx := context.Background()
 	ca, err := c.Connect(ctx, &Connect{

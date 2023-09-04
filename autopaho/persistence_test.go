@@ -26,12 +26,6 @@ func TestDisconnectAfterOutgoingPublish(t *testing.T) {
 	broker, _ := url.Parse(dummyURL)
 	serverLogger := paholog.NewTestLogger(t, "testServer:")
 	logger := paholog.NewTestLogger(t, "test:")
-	defer func() {
-		// Prevent any logging after completion. Unfortunately, there is currently no way to know if paho.Client
-		// has fully shutdown. As such, messages may be logged after shutdown (which will result in a panic).
-		serverLogger.Stop()
-		logger.Stop()
-	}()
 
 	ts := testserver.New(serverLogger)
 
@@ -186,9 +180,4 @@ func TestDisconnectAfterOutgoingPublish(t *testing.T) {
 			t.Errorf("expected 2 messages at QOS %d, got %d", qos, receivedByQos[qos])
 		}
 	}
-
-	// Prevent any future logging - unfortunately, there is currently no way to know if paho.Client has completely
-	// shutdown, as such, messages may be logged after shutdown (which will result in a panic).
-	serverLogger.Stop()
-	logger.Stop()
 }

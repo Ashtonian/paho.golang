@@ -78,6 +78,7 @@ func establishBrokerConnection(ctx context.Context, cfg ClientConfig) (*paho.Cli
 			if ctx.Err() != nil {
 				return nil, nil
 			}
+			cfg.Debug.Printf("failed to connect to %s: %w", u.String(), err)
 
 			if cfg.OnConnectError != nil {
 				cerr := fmt.Errorf("failed to connect to %s: %w", u.String(), err)

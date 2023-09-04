@@ -246,7 +246,6 @@ func NewConnection(ctx context.Context, cfg ClientConfig) (*ConnectionManager, e
 
 			// Attempt to send messages from the queue (if any). This is done before anything else so that message order
 			// is maintained
-
 			c.mu.Lock()
 			c.cli = cli
 			c.connDown = make(chan struct{})
@@ -266,7 +265,7 @@ func NewConnection(ctx context.Context, cfg ClientConfig) (*ConnectionManager, e
 
 			var err error
 			select {
-			case err = <-errChan: // Message on the error channel indicates connection has (or will) drop.
+			case err = <-errChan: // Message on the error channel indicates the connection has, or will, drop.
 			case <-innerCtx.Done():
 				cfg.Debug.Println("innerCtx Done")
 				eh.shutdown() // Prevent any errors triggered by closure of context from reaching user
@@ -281,6 +280,7 @@ func NewConnection(ctx context.Context, cfg ClientConfig) (*ConnectionManager, e
 				}
 				break mainLoop
 			}
+			<-cli.Done() // Wait for the client to fully shutdown
 			c.mu.Lock()
 			c.cli = nil
 			close(c.connDown)
@@ -420,13 +420,12 @@ connectionLoop:
 
 		c.debug.Println("queue got connection")
 		c.mu.Lock()
-		if c.cli == nil { // Possible connection dropped immediately
-			c.mu.Unlock()
-			continue
-		}
 		cli := c.cli
 		connDown := c.connDown
 		c.mu.Unlock()
+		if cli == nil { // Possible connection dropped immediately
+			continue
+		}
 
 	queueLoop:
 		for {
@@ -444,7 +443,7 @@ connectionLoop:
 			for {
 				r, err := c.queue.Peek()
 				if errors.Is(err, memory.ErrEmpty) {
-					c.debug.Println("memory.ErrEmpty returned when packet expected")
+					c.debug.Println("everything in queue transmitted")
 					continue queueLoop
 				}
 				p, err := packets.ReadPacket(r)
@@ -467,6 +466,7 @@ connectionLoop:
 					Payload:  pub.Payload,
 				}
 				pub2.InitProperties(pub.Properties)
+
 				// PublishWithOptions using PublishMethod_AsyncSend will block until the packet has been transmitted
 				// and then return (at this point any pub1+ publish will be in the session so will be retried)
 				c.debug.Printf("publishing message from queue with topic %s", pub2.Topic)

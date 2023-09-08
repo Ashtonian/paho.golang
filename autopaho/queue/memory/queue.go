@@ -9,73 +9,125 @@ import (
 )
 
 // A queue implementation that stores all data in RAM
+package memqueue
 
-var (
-	ErrEmpty = errors.New("empty queue")
+import (
+	"sync"
+	"sync/atomic"
+	"unsafe"
 )
 
-// Queue - basic memory based queue
-type Queue struct {
-	mu       sync.Mutex
-	messages [][]byte
-	waiting  []chan<- struct{}
+type LockFreeQueue[T any] struct {
+	head unsafe.Pointer
+	tail unsafe.Pointer
+	cond *sync.Cond
 }
 
-// New creates a new memory-based queue
-func New() *Queue {
-	return &Queue{}
+type node[T any] struct {
+	value T
+	next  unsafe.Pointer
 }
 
-// Wait returns a channel that is closed when there is something in the queue
-func (q *Queue) Wait() chan struct{} {
-	c := make(chan struct{})
-	q.mu.Lock()
-	if len(q.messages) > 0 {
-		q.mu.Unlock()
-		close(c)
-		return c
+func NewLockFree[T any]() *LockFreeQueue[T] {
+	node := unsafe.Pointer(new(node[T]))
+	return &LockFreeQueue[T]{
+		head: node,
+		tail: node,
+		cond: sync.NewCond(&sync.Mutex{}),
 	}
-	q.waiting = append(q.waiting, c)
-	q.mu.Unlock()
-	return c
 }
 
-// Enqueue add item to the queue.
-func (q *Queue) Enqueue(p io.Reader) error {
-	var b bytes.Buffer
-	_, err := b.ReadFrom(p)
-	if err != nil {
-		return fmt.Errorf("Queue.Push failed to read into buffer: %w", err)
+func (q *LockFreeQueue[T]) Enqueue(v T) {
+	node := &node[T]{value: v}
+	for {
+		tail := load[T](&q.tail)
+		next := load[T](&tail.next)
+		if tail == load[T](&q.tail) {
+			if next == nil {
+				if cas(&tail.next, next, node) {
+					cas(&q.tail, tail, node)
+
+					// Notify waiting goroutines
+					q.cond.Broadcast()
+
+					return
+				}
+			} else {
+				cas(&q.tail, tail, next)
+			}
+		}
 	}
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.messages = append(q.messages, b.Bytes())
-	for _, c := range q.waiting {
-		close(c)
-	}
-	q.waiting = q.waiting[:0]
-	return nil
 }
 
-// Peek retrieves the oldest item from the queue (without removing it)
-func (q *Queue) Peek() (io.ReadCloser, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.messages) == 0 {
-		return nil, ErrEmpty
+func (q *LockFreeQueue[T]) Dequeue() (v T, ok bool) {
+	for {
+		head := load[T](&q.head)
+		tail := load[T](&q.tail)
+		next := load[T](&head.next)
+		if head == load[T](&q.head) {
+			if head == tail {
+				if next == nil {
+					var zero T
+					return zero, false
+				}
+				cas(&q.tail, tail, next)
+			} else {
+				v := next.value
+				if cas(&q.head, head, next) {
+					return v, true
+				}
+			}
+		}
 	}
-	return io.NopCloser(bytes.NewReader(q.messages[0])), nil
 }
 
-// Dequeue removes the oldest item from the queue (without returning it)
-// Note that dequeue is done without copying; this will force memory allocations over time but also mean that
-// memory will be released if the queue size shrinks (this may take a while but will happen!).
-func (q *Queue) Dequeue() error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.messages) == 0 {
-		return ErrEmpty
+func (q *LockFreeQueue[T]) Wait() chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		q.cond.L.Lock()
+		for {
+			head := load[T](&q.head)
+			tail := load[T](&q.tail)
+			if head == tail {
+				q.cond.Wait()
+			} else {
+				close(ch)
+				q.cond.L.Unlock()
+				return
+			}
+		}
+	}()
+	return ch
+}
+
+func (q *LockFreeQueue[T]) Peek() *T {
+	head := load[T](&q.head)
+	tail := load[T](&q.tail)
+	next := load[T](&head.next)
+
+	if head == tail && next == nil {
+		return nil
+	} else {
+		return &next.value
 	}
-	q.messages = q.messages[1:]
-	return nil
+}
+
+func load[T any](p *unsafe.Pointer) *node[T] {
+	return (*node[T])(atomic.LoadPointer(p))
+}
+
+func cas[T any](p *unsafe.Pointer, old, new *node[T]) bool {
+	return atomic.CompareAndSwapPointer(p,
+		unsafe.Pointer(old), unsafe.Pointer(new))
+}
+
+func (q *LockFreeQueue[T]) Clear() {
+	q.head = unsafe.Pointer(new(node[T]))
+	q.tail = q.head
+}
+
+func (q *LockFreeQueue[T]) IsEmpty() bool {
+	head := load[T](&q.head)
+	tail := load[T](&q.tail)
+	return head == tail && load[T](&head.next) == nil
 }
